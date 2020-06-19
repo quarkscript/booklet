@@ -42,7 +42,7 @@ threads=0
 ##
 if [ -z "$2" ]; then
     echo get pages num
-    pages=$(gs -q -dNODISPLAY -dNumRenderingThreads=$maxthreads -c "($1) (r) file runpdfbegin pdfpagecount =" -f "$1" -o /dev/null)
+    pages=$(gs -q -dNOSAFER -dNODISPLAY -dNumRenderingThreads=$maxthreads -c "($1) (r) file runpdfbegin pdfpagecount =" -f "$1" -o /dev/null)
 else
     pages=$2
 fi
@@ -121,7 +121,7 @@ threads=0
 
 if [ -z "$2" ]; then
     echo get pages num
-    pages=$(gs -q -dNODISPLAY -dNumRenderingThreads=$maxthreads -c "($1) (r) file runpdfbegin pdfpagecount =" -f "$1" -o /dev/null)
+    pages=$(gs -q -dNOSAFER -dNODISPLAY -dNumRenderingThreads=$maxthreads -c "($1) (r) file runpdfbegin pdfpagecount =" -f "$1" -o /dev/null)
 else
     pages=$2
 fi
@@ -190,7 +190,7 @@ else
     count=0
     filename="$1"
     if [ -z "$3" ]; then
-        pages=$(gs -q -dNODISPLAY -dNumRenderingThreads=$maxthreads -c "($filename) (r) file runpdfbegin pdfpagecount =" -f "$filename" -o /dev/null)
+        pages=$(gs -q -dNOSAFER -dNODISPLAY -dNumRenderingThreads=$maxthreads -c "($filename) (r) file runpdfbegin pdfpagecount =" -f "$filename" -o /dev/null)
     else 
         pages="$3"
     fi
