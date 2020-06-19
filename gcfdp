@@ -1,0 +1,36 @@
+#!/bin/bash
+## Simple shell script to gen cover.jpg for djvu and pdf files
+## It is assumed that each file is located in its own folder.
+## Files and folders names must not contain special symbols like [] and so on
+## Uses: find, wc, head, tail, sed, ddjvu, cjpeg, gs
+## No any checks so fails are possible.
+## Author Andrew S. [github,gitlab].com/quarkscript/ Licence GPL
+
+list=$(mktemp XXXXXXX.tmp)
+
+## gen covers from djvus
+find -name *.[Dd][Jj][Vv][Uu] | sed 's@\.\/@@g' >$list
+find -name *.[Dd][Jj][Vv] | sed 's@\.\/@@g' >>$list
+for ((jj=1;jj<=$(wc -l $list | sed "s/ $list//g");jj+=1)); do
+    fileis=$(head -n $jj $list 2>&1 | tail -n 1)
+    filename=$(echo $fileis | sed 's@.*\/@@g')
+    dirname=$(echo $fileis | sed "s@\/$filename@@g")
+    if [ ! -f "$dirname/cover.jpg" ]; then
+        ddjvu -format=ppm -page=1 "$fileis" "$dirname/cover.ppm"
+        cjpeg "$dirname/cover.ppm" > "$dirname/cover.jpg"
+        rm -f "$dirname/cover.ppm"
+    fi
+done
+
+## gen covers from pdf
+find -name *.[Pp][Dd][Ff] | sed 's@\.\/@@g' >$list
+for ((jj=1;jj<=$(wc -l $list | sed "s/ $list//g");jj+=1)); do
+    fileis=$(head -n $jj $list 2>&1 | tail -n 1)
+    filename=$(echo $fileis | sed 's@.*\/@@g')
+    dirname=$(echo $fileis | sed "s@\/$filename@@g")
+    if [ ! -f "$dirname/cover.jpg" ]; then
+        gs -dNOPAUSE -dBATCH -dSAFER -sDEVICE=jpeg -sPageList=1 -sOutputFile="$dirname/cover.jpg" "$fileis"
+    fi
+done
+
+rm -f $list

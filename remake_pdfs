@@ -1,0 +1,20 @@
+#!/bin/bash
+## Simple shell script to reassemble pdf-files
+## This can be useful when you have some troubles with pdf-files.
+## Uses: gs (ghostscript), find, mv
+## No any checks so fails are possible.
+## Author Andrew S. [github,gitlab].com/quarkscript/ Licence GPL
+list=$(find -name "*.pdf" | sed 's@\.\/@@g')
+remake(){
+    newname=$(echo $1 | sed 's/.pdf/_remake.pdf/g')
+    gs -o "$newname" -sDEVICE=pdfwrite -f "$1"
+    #mv -f "$newname" "$1"
+}
+maxthreads=$(($(grep 'model name' /proc/cpuinfo --count)+1))
+threads=0
+for i in $list; do
+    threads=$(($threads+1))
+    remake "$i" &
+    if [ "$threads" -eq "$maxthreads" ]; then wait; threads=0; fi
+done
+wait

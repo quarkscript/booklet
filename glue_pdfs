@@ -1,0 +1,26 @@
+#!/bin/bash
+## Simple shell script to glue pdf-files into a single book
+## Uses: gs (ghostscript), mktemp, find, read
+## No any checks so fails are possible.
+## Author Andrew S. [github,gitlab].com/quarkscript/ Licence GPL
+list=$(echo $(find -name "*.pdf" | sed 's@\.\/@"@g' | sort -n)'"' | sed 's@ "@" "@g')
+echo ''
+echo $list
+echo ''
+read -p "Is sequence a correct? (y/n) " isrun
+if [ "$isrun" == "y" ]; then
+    if [ -f book.pdf ]; then
+        bookname=$(mktemp book-XXXXXXX.pdf)
+    else
+        bookname='book.pdf'
+    fi
+    echo ''
+    gs -o "$bookname" -sDEVICE=pdfwrite -f $list
+    echo ''
+    echo New book name is $bookname
+    echo ''
+else
+    echo ''
+    echo You may rename some files and run $0 again
+    echo ''
+fi
