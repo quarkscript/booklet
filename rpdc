@@ -1,0 +1,658 @@
+#!/bin/bash
+printhelp(){ 
+    echo "
+##      Rasterized Pdf or Djvu Combiner (rpdc) - shell scripts for
+## make booklets, split double pages, apply imagemagick filters and so on
+## ====Requires==============================================================
+## bash like shell + basic core-tools like: echo, head, tail, ls, sed, grep,
+## sort, cat, less, wc... + gs, djvu-libre, imagemagick, potrace, pdftoppm
+## ====Use===================================================================
+## $0 [par1 par2 ... or [-h,--help]]   (sequence is not important):
+## ==========================================================================
+## infile=filename_of_your_document.[pdf,djvu]                     (required)
+## do not use in filename spaces or special symbols like '*!#+=@
+## --------------------------------------------------------------------------
+## [outfile=book.[pdf,djvu]]  book.djvu by default
+## --------------------------------------------------------------------------
+## [pages=10] count of pages to process, all available by default
+## ====pages=layout==============================(one=function=per=pass)=====
+##        split2p/glue2p                   booklet
+##      -----     --- ---     --- --- --- ---   ----- -----
+##      |1|2| >/< |1|+|2|     |1|+|2|+|3|+|4| > |4|1|+|2|3|
+##      -----     --- ---     --- --- --- ---   ----- -----
+## --------------------------------------------------------------------------    
+## [split2p,split2p=100] split each page to right and left pages
+## =100 - set pixels of overlap, 0 by default
+## --------------------------------------------------------------------------
+## [glue2p] reverse of split2p, but overlap do not implemented here
+## --------------------------------------------------------------------------
+## [booklet] make simple booklet, empty extra pages will be added (when need)
+## Print reversed even pages of output document to back side, print odd pages 
+## of output document to face side and you got a simple paper booklet
+## --------------------------------------------------------------------------
+## [cbook=16] complex booklet, 16 (def) - period in pages; print in same way 
+## as a simple booklet and you got a complex booklet with specified period
+## ====imagemagick=filters===================================================
+## [rotate=0] (default) in degrees; 90 -90 15 and so on
+## --------------------------------------------------------------------------
+## [magick=[...]] apply imagemagick filters, for example
+## magick=[-auto-gamma -adaptive-blur 3 -gamma 1.2 -brightness-contrast 0x70]
+## ====extra=parameters======================================================
+## [room=10-5] make extra 5 free 'slots' from 10th page
+## This make sense only in filter pass and manual interventional after
+## --------------------------------------------------------------------------
+## [calc_pages] just calculate amount of pages that is it
+## --------------------------------------------------------------------------
+## [region=3-10] extract 10 pages from 3d, no any processing
+## ----djvu-specific-option--------------------------------------------------
+## [force-photo] djvu-out parameter, means encode all pages as photo
+## ----pdf-specific-options--------------------------------------------------
+## [pdftoppm,inkscape] use pdftoppm or inkscape instead of gs to extract 
+## ----pdf-gs-specific-options-----------------------------------------------
+## [pdfdpi=300] (default) resolution for pdf rasterization with gs
+## --------------------------------------------------------------------------
+## [pngmono, pnggray, png16, png256, png16m] - pdf rast. color space for gs
+## monochrome, 8-bit gray, 4-bit color, 8-bit color (default), 24-bit color
+## --------------------------------------------------------------------------
+## [potrace] convert grayscale pages to monochrome and vectorize it
+## --------------------------------------------------------------------------
+## [pdfrsm] reassamble pdf file
+## ----multipass-use-options-------------------------------------------------
+## [stage-extract,stage-filter,stage-mux] for run in couple passes and make
+## complex processing, for example split2p then rotate then booklet
+## ----performance-option----------------------------------------------------
+## [threads=4,threads=max] set how many cpu cores will be used, adapt. by def 
+## threads multiply not only used cpu cores but used memory too, be aware
+## ----debug-----------------------------------------------------------------
+## [selfsomedebugon,selfsomedebugoff] mod this script to hide/unhide warnings
+## --------------------------------------------------------------------------
+#############################################################################
+##                                                                          #
+## There are not all checks. Fails possible.                                #
+## Author Andrew S. [github,gitlab].com/quarkscript/ Licence GPL            #
+##                                                                          #
+#############################################################################
+## press 'q' to exit from help
+" 
+}
+
+c_t_c(){
+    ## calc threads count; $1 - each thread mem footprint
+    if [ -z "$1" ]; then
+        memfp=1
+    else
+        memfp=$1
+    fi
+    if $(echo $inargs | grep -q 'threads=max' ); then
+        threads=$(($(grep 'model name' /proc/cpuinfo --count)+1))
+    elif $(echo $inargs | grep -q 'threads=' ); then
+        threads=$(echo $inargs | sed 's/.*threads=//g' | sed 's/ .*//g')
+    else
+        tmpvar5=$(echo $(($(echo $(echo $(free) | sed 's/ Swap.*//g' | sed 's/.* //g'))/(1024*$memfp))))
+        if [ -n "$tmpvar5" ]; then
+            if [ "$tmpvar5" -gt 0 ]; then 
+                if [ "$tmpvar5" -ge "$(($(grep 'model name' /proc/cpuinfo --count)+1))" ]; then
+                    threads=$(($(grep 'model name' /proc/cpuinfo --count)+1))
+                else
+                    threads=$tmpvar5
+                fi
+            else
+                threads=1
+            fi
+        else
+            threads=1
+        fi
+    fi
+    }
+
+activmon(){
+    prsy[0]='# /'; prsy[1]='# -'; prsy[2]='# \'; prsy[3]='# |'
+    echo -en "\r${prsy[$((10#$(date | sed 's/.*://g' | sed 's/ .*//g')%4))]}"
+    echo -en "\r"
+    }
+    
+trp(){
+    ## threads processing
+    threadscount=$(($threadscount+1))
+    if [ "$threadscount" -ge "$threads" ]; then threadscount=0; activmon & 
+    wait; fi
+    }
+    
+#inargs=$(echo $@ | sed 's/,/ /g')
+inargs=$(echo $@)
+if $(echo $inargs | grep -q --regexp='-h' --regexp='--help')||[ -z "$inargs" ]; then
+    if $(less -V | grep -q 'command not found'); then
+        printhelp; exit 0
+    else
+        printhelp | less; exit 0
+    fi
+fi
+if $(echo $inargs | grep -q 'selfsomedebugon' ); then
+    sed -i 's/2>\/dev\/null/#2>\/dev\/null/g' $(echo $0 | sed 's|.\/||g')
+    sed -i 's/1>\/dev\/null/#1>\/dev\/null/g' $(echo $0 | sed 's|.\/||g')
+    sed -i 's/-o \/dev\/null/) #-o \/dev\/null/g' $(echo $0 | sed 's|.\/||g')
+    exit 0
+elif $(echo $inargs | grep -q 'selfsomedebugoff' ); then
+    sed -i 's/#2>\/dev\/null/2>\/dev\/null/g' $(echo $0 | sed 's|.\/||g')
+    sed -i 's/#1>\/dev\/null/1>\/dev\/null/g' $(echo $0 | sed 's|.\/||g')
+    sed -i 's/) #-o \/dev\/null/-o \/dev\/null/g' $(echo $0 | sed 's|.\/||g')
+    exit 0
+fi
+## check for djvulibre installed
+if $(echo $inargs | grep -q djv)&&$(djvused --help 2>&1| grep -q 'command not found')||$(echo $inargs | grep -vq outfile)&&$(echo $inargs | grep -vq --regexp='stage-extract' --regexp='stage-filter')&&$(djvused --help 2>&1| grep -q 'command not found'); then 
+    echo seems djvulibre is not installed, it required for djvu proc.
+    exit 0
+fi
+## check for ghostscript installed
+if $(echo $inargs | grep -q pdf)&&$(gs -v | grep -q 'command not found'); then 
+    echo seems ghostscript is not installed, it required for pdf proc.
+    exit 0
+fi
+## check for imagemagick installed
+if $(magick -version | grep -q 'command not found'); then 
+    echo seems imagemagick is not installed, it required in any case
+    exit 0
+fi
+## check for poppler installed
+if $(echo $inargs | grep -q pdftoppm)&&$(pdftoppm -v | grep -q 'command not found'); then 
+    echo 'seems poppler (pdftoppm) is not installed, it required when specified'
+    exit 0
+fi
+## check for inkscape installed
+if $(echo $inargs | grep -q inkscape)&&$(inkscape -V | grep -q 'command not found'); then 
+    echo 'seems inkscape is not installed, it required when specified'
+    exit 0
+fi
+## check for potrace installed
+if $(echo $inargs | grep -q potrace)&&$(potrace -v | grep -q 'command not found'); then 
+    echo 'seems potrace is not installed, it required when specified'
+    exit 0
+fi
+
+## lets say next doings may eat up to 512M of RAM for each thread
+c_t_c 512
+
+if $(echo $inargs | grep -q 'outfile=' ); then
+    outfile=$(echo $inargs | sed 's/.*outfile=//g' | sed 's/ .*//g')
+else
+    outfile=book.djvu
+fi
+if ($(echo $inargs | grep -q --regexp='stage-extract'))||($(echo $inargs | grep -vq --regexp='stage-')); then
+    if $(echo $inargs | grep -q 'infile=' ); then
+        infile=$(echo $inargs | sed 's/.*infile=//g' | sed 's/ .*//g')
+        if [ ! -f $infile ]; then
+            echo ''
+            echo "File $infile not found, or its name contain spaces, symbols an so on.
+            "; exit 0
+        fi
+    else
+        echo ''
+        echo Missing infile=filename argument. Try like 
+        echo "$0 infile=your_pdf_or_djvu_file_name
+        "; exit 0
+    fi
+    
+    ## calc pages
+    if $(echo $inargs | grep -q 'pages=' ); then
+        pages=$(echo $inargs | sed 's/.*pages=//g' | sed 's/ .*//g')
+    elif $(echo $infile | grep -iq '.djv'); then
+        echo "# # # Get djvu pages count"
+        pages=$(djvused -e "n" $infile)
+    elif $(echo $infile | grep -iq '.pdf')&&$(echo $inargs | grep -vq 'pdf2ppm'); then
+        echo "# # # Get pdf pages count"
+        pages=$(gs -q -dNOSAFER -dNODISPLAY -dNumRenderingThreads=$threads -c "($infile) (r) file runpdfbegin pdfpagecount =" -f "$infile" -o /dev/null)
+    fi
+    if $(echo $inargs | grep -q 'calc_pages'); then
+        echo $pages
+        exit 0
+    fi
+    ## extract a region of pages
+    if $(echo $inargs | grep -q 'region='); then
+        startpage=$(echo $inargs | sed 's/.*region=//g' | sed 's/-.*//g')
+        pagescount=$(echo $inargs | sed "s/.*region=$startpage-//g" | sed 's/ .*//g')
+        if $(echo $infile | grep -q pdf); then
+            echo "# Extract region from pdf"
+            gs -q -dNOSAFER -dNumRenderingThreads=$threads -sDEVICE=pdfwrite -sPageList=$startpage-$(($startpage+$pagescount)) -f "$infile" -o $(echo $outfile | sed 's/..*//g').pdf
+            exit 0
+        elif $(echo $infile | grep -q djv); then
+            echo "# Extract region from djvu"
+            cp "$infile" "$outfile"
+            tmpvar1=$(($startpage+$pagescount))
+            for ((cyclevar1=$pages; cyclevar1>=$tmpvar1; cyclevar1--)); do
+                djvm -delete "$outfile" $cyclevar1
+            done
+            for ((cyclevar1=$startpage-1; cyclevar1>=1; cyclevar1--)); do
+                djvm -delete "$outfile" $cyclevar1
+            done
+            exit 0
+        fi
+    fi
+    ## reassamble pdf
+    if $(echo $inargs | grep -q pdfrsm)&&$(echo $infile | grep -q '.pdf'); then
+         echo "# Reassamble pdf"
+         gs -o "rsm_$infile" -sDEVICE=pdfwrite -dNumRenderingThreads=$threads -f "$infile"
+         exit 0
+    fi
+fi
+if $(echo $inargs | grep -q 'pdfdpi=' ); then
+    pdfdpi=$(echo $inargs | sed 's/.*pdfdpi=//g' | sed 's/ .*//g')
+else
+    pdfdpi=300
+fi
+if $(echo $inargs | grep -q 'rotate=' ); then
+    rotate=$(echo $inargs | sed 's/.*rotate=//g' | sed 's/ .*//g')
+else
+    rotate=0
+fi
+if $(echo $inargs | grep -q 'pngmono' ); then pdfrastereng=pngmono
+elif $(echo $inargs | grep -q 'pnggray' ); then pdfrastereng=pnggray
+elif $(echo $inargs | grep -q 'png16m' ); then pdfrastereng=png16m
+elif $(echo $inargs | grep -q 'png256' ); then pdfrastereng=png256
+elif $(echo $inargs | grep -q 'png16' ); then pdfrastereng=png16
+else pdfrastereng=png256; fi
+
+#if $(echo $inargs | grep -q 'infile=' ); then
+
+#else
+
+#fi
+
+## End of some checks
+#######################
+## Extract stage
+
+if ($(echo $inargs | grep -vq 'stage-'))||($(echo $inargs | grep -q 'stage-extract')); then
+    echo "# Extract stage"
+    rm -fr work_dir
+    mkdir work_dir
+    if $(echo $infile | grep -q '.pdf')&&$(echo $inargs | grep -vq 'pdftoppm')&&$(echo $inargs | grep -vq 'inkscape'); then
+    
+        defpagesres=$(mktemp work_dir/XXXXX.tmp)
+
+        echo "# ... Extract pages with gs"
+        gs -dQUIET -dNOSAFER -dNODISPLAY -sFileName=$infile -c "FileName (r) file runpdfbegin 1 1 pdfpagecount {pdfgetpage /MediaBox get {=print ( ) print} forall (\n) print} for quit" > $defpagesres
+
+        threadscount=0
+        for ((cyclevar1=1; cyclevar1<=$pages; cyclevar1++)); do
+            tmpvar1=$(head -n $cyclevar1 $defpagesres | tail -n 1)
+            tmpvar3=$(echo $tmpvar1 | sed 's/ .*//g')
+            tmpvar4=$(echo $tmpvar1 | sed "s/ $tmpvar3//g" | sed 's/ .*//g')
+            H=$(echo $tmpvar1 | sed "s/$tmpvar3 //g" | sed "s/$tmpvar4 //g" | sed 's/ .*//g' | sed 's/\..*//g')
+            W=$(echo $tmpvar1 | sed "s/ $H//g" | sed 's/.* //g' | sed 's/\..*//g' | sed 's/ //g')
+            # lets say gs gives size with screen's dpi 72, so we will increase it to desired
+            gs -dNOPAUSE -dBATCH -dNOSAFER -sDEVICE=$pdfrastereng -dFirstPage=$cyclevar1 -dLastPage=$cyclevar1 -dPSFitPage -dFIXEDMEDIA -g$(($W*$pdfdpi/72))x$(($H*$pdfdpi/72)) -sOutputFile="work_dir/$cyclevar1.png" "$infile" 1>/dev/null & 
+            trp
+        done
+        wait
+        rm -f $defpagesres
+    elif $(echo $infile | grep -q '.pdf')&&$(echo $inargs | grep -q 'pdftoppm'); then
+        echo "# ... Extract all pages with pdftoppm (single thread)"
+        pdftoppm -png "$infile" work_dir/
+        for cyclevar1 in $(ls work_dir/ | grep '.png'); do
+            mv -f work_dir/"$cyclevar1" work_dir/"$(echo $cyclevar1 | sed 's/-00//g' | sed 's/-0//g' | sed 's/-//g')"
+        done
+    elif $(echo $infile | grep -q '.pdf')&&$(echo $inargs | grep -q 'inkscape'); then
+        echo "# ... Extract all pages with inkscape"
+        threadscount=0
+        for ((cyclevar1=1; cyclevar1<=$pages; cyclevar1++)); do
+            inkscape --export-filename=work_dir/$cyclevar1.png --pdf-page=$cyclevar1 $infile &
+            trp
+        done
+        wait
+    elif $(echo $infile | grep -q '.djv'); then
+        djvuextr(){
+            ddjvu -format=ppm -page=$cyclevar1 $infile > work_dir/$cyclevar1.ppm
+            convert work_dir/$cyclevar1.ppm work_dir/$cyclevar1.png
+            rm -f work_dir/$cyclevar1.ppm
+            }
+        for ((cyclevar1=1; cyclevar1<=$pages; cyclevar1++)); do
+            djvuextr &
+            trp
+        done
+    fi
+fi
+
+## End of extract stage
+#######################
+## Filter stage
+
+## lets say next doings may eat up to 700M of RAM for each thread
+c_t_c 700
+
+if ($(echo $inargs | grep -vq 'stage-'))||($(echo $inargs | grep -q 'stage-filter')); then
+    echo "# Filter stage"
+    
+    #if $(echo $inargs | grep -q 'rotate='); then
+        echo "# ... Rotate pages"
+        rm -fr work_dir/rotated
+        mkdir work_dir/rotated
+        frot(){
+            convert $cyclevar1 -rotate $rotate work_dir/rotated/$(echo $cyclevar1 | sed 's/.*\///g') 2>/dev/null
+            mv -f work_dir/rotated/$(echo $cyclevar1 | sed 's/.*\///g') $cyclevar1
+            }
+        threadscount=0
+        for cyclevar1 in work_dir/*.png; do
+            frot &
+            trp
+        done
+        wait
+        rm -fr work_dir/rotated
+    #fi
+    
+    if $(echo $inargs | grep -q 'magick='); then
+        echo "# ... Apply a custom imagemagick filters to pages"
+        rm -fr work_dir/magick
+        mkdir work_dir/magick
+        mkdir work_dir/magick/original
+        filters=$(echo $inargs | sed 's/.*magick=\[//g' | sed 's/\].*//g')
+        threadscount=0
+        for cyclevar1 in work_dir/*.png; do
+            mv -f $cyclevar1 work_dir/magick/original/$(echo $cyclevar1 | sed 's/.*\///g')
+            magickrun="magick work_dir/magick/original/$(echo $cyclevar1 | sed 's/.*\///g') $filters $cyclevar1 2>/dev/null &"
+            eval "$magickrun"
+            trp
+        done
+        wait
+    fi
+    
+    if $(echo $inargs | grep -q 'split2p'); then
+        echo "# ... Split double pages to single"
+        rm -fr work_dir/split
+        mkdir work_dir/split
+        mkdir work_dir/split/original
+        if $(echo $inargs | grep -q 'split2p='); then
+            overlap=$(echo $inargs | sed 's/.*split2p=//g' | sed 's/ .*//g')
+        else
+            overlap=0
+        fi
+        split_func(){
+            tmpvar1=$(identify $cyclevar1 | sed 's/.*PNG //g' | sed 's/ .*//g')
+            W=$(echo $tmpvar1 | sed 's/x.*//g')
+            H=$(echo $tmpvar1 | sed 's/.*x//g')
+            if [ $W -gt $H ]; then
+                convert $cyclevar1 -crop $((($W/2)+$overlap))x$H+0+0 +repage work_dir/split/$(($(echo $cyclevar1 | sed 's/.*\///g' | sed 's/\..*//g')*2-1)).png 2>/dev/null
+                convert $cyclevar1 -crop $((($W/2)+$overlap))x$H+$((($W/2)-$overlap))+0 +repage work_dir/split/$(($(echo $cyclevar1 | sed 's/.*\///g' | sed 's/\..*//g')*2)).png 2>/dev/null
+            else
+                convert $cyclevar1 -crop "$W"x"$((($H/2)+$overlap))"+0+0 +repage work_dir/split/$(($(echo $cyclevar1 | sed 's/.*\///g' | sed 's/\..*//g')*2-1)).png 2>/dev/null
+                convert $cyclevar1 -crop "$W"x"$((($H/2)+$overlap))"+0+$((($H/2)-$overlap)) +repage work_dir/split/$(($(echo $cyclevar1 | sed 's/.*\///g' | sed 's/\..*//g')*2)).png 2>/dev/null
+            fi
+            mv $cyclevar1 "$(echo $cyclevar1 | sed 's/work_dir/work_dir\/split\/original/g')"
+        }
+        for cyclevar1 in work_dir/*.png; do
+            split_func &
+            trp
+        done
+        wait
+        for cyclevar1 in work_dir/split/*.png; do
+            mv $cyclevar1 "$(echo $cyclevar1 | sed 's/split\///g')"
+        done
+    fi
+    
+    glue_func(){
+        rm -fr work_dir/glued
+        mkdir work_dir/glued
+        mkdir work_dir/glued/original
+        glue_subfunc(){
+            tmpvar1=$(identify $leftpage | sed 's/.*PNG //g' | sed 's/ .*//g')
+            W=$(echo $tmpvar1 | sed 's/x.*//g')
+            H=$(echo $tmpvar1 | sed 's/.*x//g')
+            if [ "$rightpage" == "" ]; then
+                rightpage='work_dir/rightpage.png'
+                convert -size "$W"x"$H" xc: $rightpage 2>/dev/null
+            fi
+            if [ $W -lt $H ]; then
+                montage $leftpage $rightpage -tile 2x1 -geometry +0+0 work_dir/glued/$(($(echo $countvar1 | sed 's/.*\///g' | sed 's/\..*//g')/2)).png 2>/dev/null
+            else
+                montage $leftpage $rightpage -tile 1x2 -geometry +0+0 work_dir/glued/$(($(echo $countvar1 | sed 's/.*\///g' | sed 's/\..*//g')/2)).png 2>/dev/null
+            fi
+            mv $leftpage "$(echo $leftpage | sed 's|\/0|\/|g' | sed 's|\/0|\/|g' | sed 's|\/0|\/|g' | sed 's|\/0|\/|g' | sed 's/work_dir/work_dir\/glued\/original/g')"
+            mv $rightpage "$(echo $rightpage | sed 's|\/0|\/|g' | sed 's|\/0|\/|g' | sed 's|\/0|\/|g' | sed 's|\/0|\/|g'| sed 's/work_dir/work_dir\/glued\/original/g')"
+        }
+        ## rename files for make right gluing
+        for cyclevar1 in work_dir/*.png; do
+            printf -v out_file_name "%05d" $(echo $cyclevar1 | sed 's/.*\///g' | sed 's/.png//g') # add extra zeros
+            mv -f $cyclevar1 work_dir/$out_file_name.png
+        done
+        countvar1=0
+        for cyclevar1 in work_dir/*.png; do
+            countvar1=$(($countvar1+1))
+            if [ "$(($countvar1%2))" -eq 0 ]; then
+                rightpage=$cyclevar1
+                glue_subfunc &
+            else
+                leftpage=$cyclevar1
+            fi
+            trp
+        done
+        if [ "$(($countvar1%2))" -gt 0 ]; then
+            rightpage=''
+            glue_subfunc &
+        fi
+        wait
+        for cyclevar1 in work_dir/glued/*.png; do
+            mv -f $cyclevar1 "$(echo $cyclevar1 | sed 's/glued\///g')"
+        done
+    }
+    booklet_func(){
+        rm -fr work_dir/bklsort
+        mkdir work_dir/bklsort
+        countvar1=0
+        for cyclevar1 in work_dir/*.png; do
+            printf -v out_file_name "%05d" $(echo $cyclevar1 | sed 's/.*\///g' | sed 's/.png//g') # add extra zeros
+            mv -f $cyclevar1 work_dir/bklsort/$out_file_name.png
+            countvar1=$(($countvar1+1))
+        done
+        
+        if [ "$(($countvar1%4))" -gt 0 ]; then
+            cyclevar1=$(echo @$(ls work_dir/bklsort/ | sort | tail -n 1) | sed 's/@0/@/g' | sed 's/@0/@/g' | sed 's/@0/@/g' | sed 's/@0/@/g' | sed 's/@//g' | sed 's/.png//g')
+            tmpvar1=$(identify work_dir/bklsort/$out_file_name.png | sed 's/.*PNG //g' | sed 's/ .*//g')
+            W=$(echo $tmpvar1 | sed 's/x.*//g')
+            H=$(echo $tmpvar1 | sed 's/.*x//g')
+            for ((cyclevar2=1;cyclevar2<="$((4-($countvar1%4)))";cyclevar2++)); do
+                printf -v out_file_name "%05d" "$(($cyclevar1+$cyclevar2))" # add extra zeros
+                convert -size "$W"x"$H" xc: work_dir/bklsort/$out_file_name.png 2>/dev/null
+            done
+        fi
+        pagelist=$(mktemp work_dir/bklsort/XXXXXX.tmp)
+        countvar1=0
+        for cyclevar1 in work_dir/bklsort/*.png; do
+            echo $cyclevar1 >> $pagelist
+            countvar1=$(($countvar1+1))
+        done
+        for ((cyclevar1=1;cyclevar1<=$(($countvar1/2));cyclevar1+=2)); do
+            cp $(echo $(tail -n +$(($countvar1+1-$cyclevar1)) $pagelist | head -n 1)) work_dir/$((2*$cyclevar1-1)).png
+            cp $(echo $(head -n $cyclevar1 $pagelist | tail -n 1)) work_dir/$((2*$cyclevar1)).png
+            cp $(echo $(head -n $(($cyclevar1+1)) $pagelist | tail -n 1)) work_dir/$((2*$cyclevar1+1)).png
+            cp $(echo $(tail -n +$(($countvar1-$cyclevar1)) $pagelist | head -n 1)) work_dir/$((2*$cyclevar1+2)).png
+        done
+    }
+    
+    
+    if $(echo $inargs | grep -q 'glue2p'); then
+        echo "# ... Glue single pages to double"
+        glue_func
+    elif $(echo $inargs | grep -q 'booklet'); then
+        echo "# ... Make simple booklet"
+        echo "# ... ... Resort pages"
+        booklet_func
+        echo "# ... ... Glue pages"
+        glue_func
+    elif $(echo $inargs | grep -q 'cbook'); then
+        echo "# ... Make complex booklet"
+        if $(echo $inargs | grep -q 'cbook='); then
+            period=$(echo $inargs | sed 's/.*cbook=//g' | sed 's/ .*//g')
+        else
+            period=16
+        fi
+        rm -fr work_dir/cbooklet
+        mkdir work_dir/cbooklet
+        mkdir work_dir/cbooklet/orig
+        for cyclevar1 in work_dir/*.png; do
+            printf -v out_file_name "%05d" $(echo $cyclevar1 | sed 's/.*\///g' | sed 's/.png//g') # add extra zeros
+            mv -f $cyclevar1 work_dir/cbooklet/orig/$out_file_name.png
+        done
+        countvar2=0
+        countvar3=0
+        for cyclevar3 in work_dir/cbooklet/orig/*.png; do
+            tmpvar2=$(echo $cyclevar3 | sed 's/.*\/0/@0/g' | sed 's/.*@0/@/g' | sed 's/@0/@/g' | sed 's/.*@0/@/g' | sed 's/.*@0/@/g' | sed 's/@//g')
+            cp $cyclevar3 work_dir/$tmpvar2
+            countvar2=$(($countvar2+1))
+            if [ "$countvar2" -eq "$period" ]; then
+                echo "# ... ... Resort pages"
+                booklet_func
+                echo "# ... ... Glue pages"
+                glue_func
+                countvar2=0
+                for cyclevar4 in work_dir/*.png; do
+                    countvar3=$(($countvar3+1))
+                    mv -f $cyclevar4 work_dir/cbooklet/$countvar3.png
+                done
+            fi
+        done
+        if $(ls work_dir/ | grep -q '.png'); then
+            echo "# ... ... Resort pages"
+            booklet_func
+            echo "# ... ... Glue pages"
+            glue_func
+            for cyclevar4 in work_dir/*.png; do
+                countvar3=$(($countvar3+1))
+                mv -f $cyclevar4 work_dir/cbooklet/$countvar3.png
+            done
+        fi
+        echo "# ... ... Move pages"
+        for cyclevar1 in work_dir/cbooklet/*.png; do
+            mv -f $cyclevar1 work_dir/$(echo $cyclevar1 | sed 's/.*\///g')
+        done
+    fi
+    
+    if $(echo $inargs | grep -q 'room='); then
+        echo "# ... Make extra 'room' for manual pages insert"
+        rm -fr work_dir/room
+        mkdir work_dir/room
+        mkdir work_dir/room/original
+        startpage=$(echo $inargs | sed 's/.*room=//g' | sed 's/-.*//g')
+        freecount=$(echo $inargs | sed "s/.*room=$startpage-//g" | sed 's/ .*//g')
+        
+        for cyclevar1 in $(echo $(ls work_dir | grep '.png' | sort -n)); do
+            countvar1=$(echo $cyclevar1 | sed 's/.*\///g' | sed 's/.png//g')
+            if [ "$countvar1" -ge "$startpage" ]; then
+                mv -f work_dir/$cyclevar1 work_dir/room/original/$(($countvar1+$freecount+0)).png
+            else
+                mv -f work_dir/$cyclevar1 work_dir/room/original/$countvar1.png
+            fi
+        done
+        for cyclevar1 in work_dir/room/original/*.png; do
+            mv -f $cyclevar1 work_dir/$(echo $cyclevar1 | sed 's/.*\///g')
+        done
+    fi
+    
+    
+fi
+
+## End of filter stage
+#######################
+## Mux stage
+
+## lets say next doings may eat up to 1000M of RAM for each thread
+c_t_c 1000
+
+if ($(echo $inargs | grep -vq 'stage-'))||($(echo $inargs | grep -q 'stage-mux')); then
+    
+    echo "# Mux stage"
+    if $(echo $outfile | grep -q '.djv'); then
+        echo "# ... Prepare pages for conversion"
+        threadscount=0
+        for cyclevar1 in work_dir/*.png; do
+            if $(identify $cyclevar1 | grep -vq Gray)||$(echo $inargs | grep -q force-photo); then
+                magick $cyclevar1 work_dir/$(echo $cyclevar1  | sed 's|.*\/||g').ppm 2>/dev/null &
+            else
+            ## conversion to pbm may eats a lot of RAM
+                magick $cyclevar1 work_dir/$(echo $cyclevar1  | sed 's|.*\/||g').pbm 2>/dev/null &
+            fi
+            trp
+        done
+        wait
+
+        if $(ls work_dir/ | grep -q '.ppm'); then
+            echo "# ... Process *.ppm > *.djvu"
+            threadscount=0
+            for cyclevar1 in work_dir/*.ppm; do
+                #cpaldjvu $cyclevar1 $(echo $cyclevar1  | sed 's|.*\/||g').djvu &
+                c44 $cyclevar1 work_dir/$(echo $cyclevar1  | sed 's|.*\/||g').djvu &
+                trp
+            done
+            wait
+        fi
+        if $(ls work_dir/ | grep -q '.pbm'); then
+            echo "# ... Process *.pbm > *.djvu"
+            threadscount=0
+            for cyclevar1 in work_dir/*.pbm; do
+                cjb2 $cyclevar1 -losslevel 200 work_dir/$(echo $cyclevar1  | sed 's|.*\/||g').djvu &
+                trp
+            done
+            wait
+        fi
+        
+        echo "# ... Assemble book from single djvu pages"
+        first_ok=''
+        for cyclevar1 in $(echo $(ls work_dir | grep djvu | sort -n)); do
+            if [ "$first_ok" == "" ]; then
+                cp work_dir/$cyclevar1 $outfile
+                first_ok=1;
+            else
+                djvm -i $outfile work_dir/$cyclevar1
+            fi
+        done
+    elif $(echo $outfile | grep -q '.pdf'); then
+        threadscount=0
+        echo "# ... Prepare pages for conversion"
+        if $(echo $inargs | grep -q potrace); then
+            for cyclevar1 in work_dir/*.png; do
+                ## conversion to pbm may eats a lot of RAM
+                if $(identify $cyclevar1 | grep -vq Gray)||$(echo $inargs | grep -q force-photo); then
+                    magick $cyclevar1 work_dir/$(echo $cyclevar1  | sed 's|.*\/||g').ppm 2>/dev/null &
+                else
+                    ## conversion to pbm may eats a lot of RAM
+                    magick $cyclevar1 work_dir/$(echo $cyclevar1  | sed 's|.*\/||g').pbm 2>/dev/null &
+                fi
+                trp
+            done
+            wait
+            echo "# ... Convert *.ppm > *.pdf"
+            threadscount=0
+            for cyclevar1 in work_dir/*.ppm; do
+                magick $cyclevar1 work_dir/$(echo $cyclevar1  | sed 's|.*\/||g').pdf 2>/dev/null &
+                trp
+            done
+            wait
+            echo "# ... Trace *.pbm > *.pdf"
+            threadscount=0
+            for cyclevar1 in work_dir/*.pbm; do
+                potrace -b pdf "work_dir/$(echo $cyclevar1  | sed 's|.*\/||g')" -o work_dir/$(echo $cyclevar1  | sed 's|.*\/||g').pdf  &
+                trp
+            done
+            wait
+            echo "# ... Assemble pdf file"
+            cd work_dir
+            gs -o "../$outfile" -sDEVICE=pdfwrite -dNOPAUSE -dPDFFitPage -dNumRenderingThreads=$threads -sPAPERSIZE=a4 $(echo $(ls | grep '.pdf' | sort -n)) 1>/dev/null
+            cd ../
+        else
+            threadscount=0
+            for cyclevar1 in work_dir/*.png; do
+                magick $cyclevar1 work_dir/$(echo $cyclevar1  | sed 's|.*\/||g').pdf 2>/dev/null &
+                trp
+            done
+            wait
+            echo "# ... Assemble pdf file"
+            cd work_dir
+            gs -o "../$outfile" -sDEVICE=pdfwrite -dNOPAUSE -dPDFFitPage -dNumRenderingThreads=$threads -sPAPERSIZE=a4 $(echo $(ls | grep '.pdf' | sort -n)) 1>/dev/null
+            #convert $(echo $(ls | grep '.png' | sort -n)) "../$outfile" 2>/dev/null
+            cd ../
+            
+        fi
+    fi
+
+fi
+
+## End of mux stage
+#######################
