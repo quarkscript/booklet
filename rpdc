@@ -425,6 +425,7 @@ if ($(echo $inargs | grep -vq 'stage-'))||($(echo $inargs | grep -q 'stage-filte
             trp
         done
         if [ "$(($countvar1%2))" -gt 0 ]; then
+            countvar1=$(($countvar1+1))
             rightpage=''
             glue_subfunc &
         fi
