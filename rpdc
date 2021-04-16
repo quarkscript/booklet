@@ -121,7 +121,7 @@ trp(){
 #inargs=$(echo $@ | sed 's/,/ /g')
 inargs=$(echo $@)
 if $(echo $inargs | grep -q --regexp='-h' --regexp='--help')||[ -z "$inargs" ]; then
-    if $(less -V | grep -q 'command not found'); then
+    if $(less -V 2>&1| grep -q 'command not found'); then
         printhelp; exit 0
     else
         printhelp | less; exit 0
@@ -144,27 +144,27 @@ if $(echo $inargs | grep -q djv)&&$(djvused --help 2>&1| grep -q 'command not fo
     exit 0
 fi
 ## check for ghostscript installed
-if $(echo $inargs | grep -q pdf)&&$(gs -v | grep -q 'command not found'); then 
+if $(echo $inargs | grep -q pdf)&&$(gs -v 2>&1| grep -q 'command not found'); then 
     echo seems ghostscript is not installed, it required for pdf proc.
     exit 0
 fi
 ## check for imagemagick installed
-if $(magick -version | grep -q 'command not found'); then 
+if $(magick -version 2>&1| grep -q 'command not found'); then 
     echo seems imagemagick is not installed, it required in any case
     exit 0
 fi
 ## check for poppler installed
-if $(echo $inargs | grep -q pdftoppm)&&$(pdftoppm -v | grep -q 'command not found'); then 
+if $(echo $inargs | grep -q pdftoppm)&&$(pdftoppm -v 2>&1| grep -q 'command not found'); then 
     echo 'seems poppler (pdftoppm) is not installed, it required when specified'
     exit 0
 fi
 ## check for inkscape installed
-if $(echo $inargs | grep -q inkscape)&&$(inkscape -V | grep -q 'command not found'); then 
+if $(echo $inargs | grep -q inkscape)&&$(inkscape -V 2>&1| grep -q 'command not found'); then 
     echo 'seems inkscape is not installed, it required when specified'
     exit 0
 fi
 ## check for potrace installed
-if $(echo $inargs | grep -q potrace)&&$(potrace -v | grep -q 'command not found'); then 
+if $(echo $inargs | grep -q potrace)&&$(potrace -v 2>&1| grep -q 'command not found'); then 
     echo 'seems potrace is not installed, it required when specified'
     exit 0
 fi
@@ -210,9 +210,12 @@ if ($(echo $inargs | grep -q --regexp='stage-extract'))||($(echo $inargs | grep 
     if $(echo $inargs | grep -q 'region='); then
         startpage=$(echo $inargs | sed 's/.*region=//g' | sed 's/-.*//g')
         pagescount=$(echo $inargs | sed "s/.*region=$startpage-//g" | sed 's/ .*//g')
+        if [ "$(($startpage+$pagescount-1))" -gt "$pages" ]; then
+            pagescount=$(($pages-$startpage+1))
+        fi
         if $(echo $infile | grep -q pdf); then
-            echo "# Extract region from pdf"
-            gs -q -dNOSAFER -dNumRenderingThreads=$threads -sDEVICE=pdfwrite -sPageList=$startpage-$(($startpage+$pagescount)) -f "$infile" -o $(echo $outfile | sed 's/..*//g').pdf
+            echo "# Extract pages (start at $startpage to $(($startpage+$pagescount-1))) from pdf" 
+            gs -q -dNOSAFER -dNumRenderingThreads=$threads -sDEVICE=pdfwrite -o $(echo $outfile | sed 's/\..*//g').pdf -sPageList=$startpage-$(($startpage+$pagescount-1)) -f "$infile" 
             exit 0
         elif $(echo $infile | grep -q djv); then
             echo "# Extract region from djvu"
@@ -224,6 +227,9 @@ if ($(echo $inargs | grep -q --regexp='stage-extract'))||($(echo $inargs | grep 
             for ((cyclevar1=$startpage-1; cyclevar1>=1; cyclevar1--)); do
                 djvm -delete "$outfile" $cyclevar1
             done
+            exit 0
+        else
+            echo document formats except pdf and djvu are not supported
             exit 0
         fi
     fi
