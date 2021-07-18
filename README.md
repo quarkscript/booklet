@@ -3,6 +3,8 @@
 - convert to booklet / split double pages to single pages / glue single pages to double
 - apply imagemagick filters to each page
 - run in different stages / multipass processing / lets manual intervention
+
+and it has a 'gui' (Xdialog required)
 > **for more help see script code or run `./rpdc -h`**
 #### pdf -> 'booklet'.pdf (a4)
 [**mbkl**](mbkl) - bash script to make pdf booklets. It use ghostscript and it could:
