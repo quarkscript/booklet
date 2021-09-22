@@ -61,8 +61,8 @@ printhelp(){
 ## [stage-extract,stage-filter,stage-mux] for run in couple passes and make
 ## complex processing, for example split2p then rotate then booklet
 ## ----performance-option----------------------------------------------------
-## [threads=4,threads=max] set how many cpu cores will be used, adapt. by def 
-## threads multiply not only used cpu cores but used memory too, be aware
+## [proc=4] set limit of simultaneous processes, max by default 
+## proc. multiply not only used cpu cores but used memory too, be aware
 ## ----debug-----------------------------------------------------------------
 ## [selfsomedebugon,selfsomedebugoff] mod this script to hide/unhide warnings
 ## --------------------------------------------------------------------------
@@ -77,32 +77,63 @@ printhelp(){
 }
 
 c_t_c(){
-    ## calc threads count; $1 - each thread mem footprint
+    ## calc process count; $1 - each process mem footprint $2 multiplier
+    if [ -z $2 ]; then
+        tmpvar11=8
+    else
+        tmpvar11=$2
+    fi
+    tmpvar10=$(echo $(($(echo $(echo $(free) | sed 's/ Swap.*//g' | sed 's/.* //g'))/1024))) # available ram
+    tmpvar12=$(($(grep 'model name' /proc/cpuinfo --count)+0)) # amount of cpus
     if [ -z "$1" ]; then
-        memfp=1
+        tmpvar8=$(identify "work_dir/$(ls work_dir/ | grep png | head -n 1)")
+        tmpvar9=$(($(echo $tmpvar8 | sed 's/.* PNG //g' | sed 's/ .*//g' | sed 's/x.*//g')*$(echo $tmpvar8 | sed 's/.* PNG //g' | sed 's/ .*//g' | sed 's/.*x//g')*64/(8*1024*1024))) # uncompressed image size where 1 pixel is 8 bytes
+        if [ $tmpvar9 -eq 0 ]; then
+            tmpvar9=1
+        fi
+        
+        if [ "$(($tmpvar10*9/10))" -ge "$(($tmpvar9*($tmpvar12+1)*16))" ]; then
+            memfp="$(($tmpvar10*9/(10*($tmpvar12+1))))"
+            limits=" -limit memory $(($memfp+0))M -limit map 0M"
+        elif [ "$(($tmpvar10*9/10))" -ge "$(($tmpvar9*$tmpvar12*10))" ]; then
+            memfp="$(($tmpvar9*10))"
+            limits=" -limit memory $(($memfp+0))M -limit map 0M"
+        elif [ "$(($tmpvar10*9/10))" -ge "$(($tmpvar9*$tmpvar12*$tmpvar11))" ]; then
+            memfp="$(($tmpvar9*$tmpvar11))"
+            limits=" -limit memory $(($memfp+0))M -limit map 0M"
+        elif [ "$(($tmpvar10*9/(10*2)))" -ge "$(($tmpvar9*$tmpvar11))" ]; then
+            memfp="$(($tmpvar9*$tmpvar11))"
+            limits=" -limit memory $(($memfp+0))M -limit map 0M"
+        else
+        #elif $(echo $(df /tmp) | grep -vq tmpfs); then
+            limits=" -limit memory $(($tmpvar10*9/10))M -limit map 0M"
+            memfp="$(($tmpvar10*9/10))"
+        #else
+        #    limits="-limit proc 1 -limit memory 256M -limit map 0M"
+        #    memfp=256
+        fi
     else
         memfp=$1
+        limits=""
     fi
-    if $(echo $inargs | grep -q 'threads=max' ); then
-        threads=$(($(grep 'model name' /proc/cpuinfo --count)+1))
-    elif $(echo $inargs | grep -q 'threads=' ); then
-        threads=$(echo $inargs | sed 's/.*threads=//g' | sed 's/ .*//g')
-    else
-        tmpvar5=$(echo $(($(echo $(echo $(free) | sed 's/ Swap.*//g' | sed 's/.* //g'))/(1024*$memfp))))
-        if [ -n "$tmpvar5" ]; then
-            if [ "$tmpvar5" -gt 0 ]; then 
-                if [ "$tmpvar5" -ge "$(($(grep 'model name' /proc/cpuinfo --count)+1))" ]; then
-                    threads=$(($(grep 'model name' /proc/cpuinfo --count)+1))
-                else
-                    threads=$tmpvar5
-                fi
+    
+    tmpvar5=$((tmpvar10/$memfp))
+    if [ -n "$tmpvar5" ]; then
+        if $(echo $inargs | grep -q 'proc=' )&&[ "$(echo $inargs | sed 's/.*proc=//g' | sed 's/ .*//g')" -le "$tmpvar5" ]; then
+            procs=$(echo $inargs | sed 's/.*proc=//g' | sed 's/ .*//g')
+        elif [ "$tmpvar5" -gt 0 ]; then 
+            if [ "$tmpvar5" -ge "$(($tmpvar12+1))" ]; then
+                procs=$(($tmpvar12+1))
             else
-                threads=1
+                procs=$tmpvar5
             fi
         else
-            threads=1
+            procs=1
         fi
+    else
+        procs=1
     fi
+    #echo " -diagnostic-msg- memfp=$memfp Mb proc=$procs image size up lim $tmpvar9 Mb cpu cores $tmpvar12"
     }
 
 activmon(){
@@ -112,9 +143,9 @@ activmon(){
     }
     
 trp(){
-    ## threads processing
-    threadscount=$(($threadscount+1))
-    if [ "$threadscount" -ge "$threads" ]; then threadscount=0; activmon & 
+    ## procs (process) processing
+    procscount=$(($procscount+1))
+    if [ "$procscount" -ge "$procs" ]; then procscount=0; activmon & 
     wait; fi
     }
     
@@ -130,7 +161,7 @@ selectdocument(){
     done
     var_len_dialog+=' 2>'"$dialog_exitstatus"
     eval "$var_len_dialog"
-    run_command+="infile=$(cat $dialog_exitstatus) "
+    run_command+="infile=$(cat $dialog_exitstatus | tail -n 1 ) "
     rm -f $tmpfile33
 }
 if [ -z "$inargs" ] && $($dialogapp --version 2>&1 | grep -q 'command not found') || $(echo $inargs | grep -q --regexp='-h' --regexp='--help'); then
@@ -146,101 +177,114 @@ elif $($dialogapp --version 2>&1 | grep -vq 'command not found') && [ -z "$inarg
     run_command="$0 "
     $dialogapp --title "Simple pseudo gui of $0" --radiolist 'Rasterized Pdf or Djvu Combiner (rpdc) - shell scripts for\nmake booklets, split double pages, apply imagemagick filters and so on\n\nAuthor/dev. Andrew S. [github,gitlab].com/quarkscript/ Licence GPL' '28' '100' '' 'default' 'split->filter->mux pdf/djvu document' 'on' 'pdfrsm' 'reassemble pdf with gs' '' 'calc_pages' '' '' 'region' 'extract X pages start at Y page' ''  2>"$dialog_exitstatus"
     
-    if $(cat $dialog_exitstatus | grep -vq --regexp='default' --regexp='region'); then
-        run_command+="$(cat $dialog_exitstatus) "
+    if [ -z "$(cat $dialog_exitstatus | tail -n 1 )" ]; then
+        rm -f $dialog_exitstatus
+        exit 0
     fi
     
-    if $(cat $dialog_exitstatus | grep -q 'default'); then
+    if [ $(cat $dialog_exitstatus | wc -l) -gt 1 ]; then
+        $dialogapp --title 'Unexpected events' --no-cancel --msgbox "It looks like some errors or warnings have occurred. This may interfere with gui. \nIf somethink fail you can fix the problems and try this script again or run it without a gui \n\n$(cat $dialog_exitstatus | head -n $(($(cat $dialog_exitstatus | wc -l)-1)) )\n" '' ''
+        #exit 1
+    fi
+    
+    if $(cat $dialog_exitstatus | tail -n 1  | grep -vq --regexp='default' --regexp='region'); then
+        run_command+="$(cat $dialog_exitstatus | tail -n 1 ) "
+    fi
+    
+    if $(cat $dialog_exitstatus | tail -n 1  | grep -q 'default'); then
         
         $dialogapp --title "Simple pseudo gui of $0" --no-cancel --checklist 'Select required stages or leave all empty for default' '20' '80' '' 'stage-extract' 'split pages to single raster pictures' '' 'stage-filter' 'make booklet or apply an imagemagick filters or so on' '' 'stage-mux' 'assemble pages to output djvu or pdf document' '' 2>"$dialog_exitstatus"
         
-        tmpvar6=$(cat $dialog_exitstatus | sed 's|\/| |g')
+        tmpvar6=$(cat $dialog_exitstatus | tail -n 1  | sed 's|\/| |g')
+        
         run_command+="$(echo $tmpvar6) "
         if $(echo $tmpvar6 | grep -q stage-extract) || [ -z "$tmpvar6" ]; then
             
             selectdocument
             
-            if $(cat $dialog_exitstatus | grep -q '.pdf'); then
+            if $(cat $dialog_exitstatus | tail -n 1  | grep -q '.pdf'); then
                 $dialogapp --title "Simple pseudo gui of $0" --no-cancel --radiolist 'Specify an engine to rasterize pdf' '18' '40' '' 'gs' '' '' 'pdftoppm' '' '' 'inkscape' '' ''  2>"$dialog_exitstatus"
-                if $(cat $dialog_exitstatus | grep -vq 'gs'); then
-                    run_command+="$(cat $dialog_exitstatus) "
+                if $(cat $dialog_exitstatus | tail -n 1  | grep -vq 'gs'); then
+                    run_command+="$(cat $dialog_exitstatus | tail -n 1 ) "
                 else
                     $dialogapp --title "Simple pseudo gui of $0" --no-cancel --radiolist 'Specify a color space' '20' '40' '' 'pngmono' 'monochrome' '' 'pnggray' '8-bit gray' '' 'png16' '4-bit color' '' 'png256' '8-bit color' 'on' 'png16m' '24-bit color' ''  2>"$dialog_exitstatus"
-                    run_command+="$(cat $dialog_exitstatus) "
+                    run_command+="$(cat $dialog_exitstatus | tail -n 1 ) "
                     $dialogapp --title "Simple pseudo gui of $0" --no-cancel --inputbox 'Specify images resolution in dpi' '10' '50' '300' 2>"$dialog_exitstatus"
-                    run_command+="pdfdpi=$(cat $dialog_exitstatus) "
+                    run_command+="pdfdpi=$(cat $dialog_exitstatus | tail -n 1 ) "
                 fi
             fi
             
             $dialogapp --title "Simple pseudo gui of $0" --no-cancel --inputbox 'Specify pages count or leave empty\nto process all available' '10' '50' '' 2>"$dialog_exitstatus"
-            if $(cat $dialog_exitstatus | grep -q [0-9]); then
-                run_command+="pages=$(cat $dialog_exitstatus | sed 's/ //g') "
+            if $(cat $dialog_exitstatus | tail -n 1  | grep -q [0-9]); then
+                run_command+="pages=$(cat $dialog_exitstatus | tail -n 1  | sed 's/ //g') "
             fi
         fi
         if $(echo $tmpvar6 | grep -q stage-filter) || [ -z "$tmpvar6" ]; then
             
             $dialogapp --title "Simple pseudo gui of $0" --no-cancel --inputbox 'Specify rotate angle\nit will be applied any way' '10' '50' '0' 2>"$dialog_exitstatus"
-            run_command+="rotate=$(cat $dialog_exitstatus | sed 's/ //g') "
+            run_command+="rotate=$(cat $dialog_exitstatus | tail -n 1  | sed 's/ //g') "
             
             $dialogapp --title "Simple pseudo gui of $0" --no-cancel --radiolist 'Specify a filter or sheme' '24' '80' '' 'none' '' 'on' 'split2p' '|1|2| > |1|+|2| or |1/2| > |1|+|2|' '' 'glue2p' '|1|+|2| > |1|2| or |1|+|2| > |1/2|' '' 'booklet' '|1|+|2|+|3|+|4| > |4|1|+|2|3|' '' 'cbook' 'make complex booklet' '' 'magick' 'apply custom imagemagick filters' '' 'room' 'make extra free slots for manual intervention' '' 2>"$dialog_exitstatus"
             
-            tmpvar7=$(cat $dialog_exitstatus)
+            tmpvar7=$(cat $dialog_exitstatus | tail -n 1 )
             if [ "$tmpvar7" == "split2p" ]; then
                 $dialogapp --title "Simple pseudo gui of $0" --no-cancel --inputbox 'Specify overlap pixels\npositive or negative' '10' '50' '0' 2>"$dialog_exitstatus"
-                run_command+="split2p=$(cat $dialog_exitstatus | sed 's/ //g') "
+                run_command+="split2p=$(cat $dialog_exitstatus | tail -n 1  | sed 's/ //g') "
             elif [ "$tmpvar7" == "cbook" ]; then
                 $dialogapp --title "Simple pseudo gui of $0" --no-cancel --inputbox 'Specify period in pages' '10' '50' '16' 2>"$dialog_exitstatus"
-                run_command+="cbook=$(cat $dialog_exitstatus | sed 's/ //g') "
+                run_command+="cbook=$(cat $dialog_exitstatus | tail -n 1  | sed 's/ //g') "
             elif [ "$tmpvar7" == "magick" ]; then
                 $dialogapp --title "Simple pseudo gui of $0" --no-cancel --inputbox 'Specify imagemagick filters like\n-auto-gamma -adaptive-blur 3 -gamma 1.2 -brightness-contrast 0x70' '10' '100' '' 2>"$dialog_exitstatus"
-                run_command+="magick=[$(cat $dialog_exitstatus)] "
+                run_command+="magick=[$(cat $dialog_exitstatus | tail -n 1 )] "
             elif [ "$tmpvar7" == "room" ]; then
                 $dialogapp --title "Simple pseudo gui of $0" --no-cancel --inputbox 'Specify start position for manual insert pages' '10' '60' '' 2>"$dialog_exitstatus"
-                run_command+="room=$(cat $dialog_exitstatus | sed 's/ //g')-"
+                run_command+="room=$(cat $dialog_exitstatus | tail -n 1  | sed 's/ //g')-"
                 $dialogapp --title "Simple pseudo gui of $0" --no-cancel --inputbox 'Specify count of manual inserted pages' '10' '60' '' 2>"$dialog_exitstatus"
-                run_command+="$(cat $dialog_exitstatus | sed 's/ //g') "
+                run_command+="$(cat $dialog_exitstatus | tail -n 1  | sed 's/ //g') "
             else
-                run_command+="$(cat $dialog_exitstatus)"
+                run_command+="$(cat $dialog_exitstatus | tail -n 1 )"
             fi
-            
-            
         fi
         if $(echo $tmpvar6 | grep -q stage-mux) || [ -z "$tmpvar6" ]; then
             $dialogapp --title "Simple pseudo gui of $0" --no-cancel --inputbox 'Enter output file (pdf or djvu)' '10' '50' 'book.djvu' 2>"$dialog_exitstatus"
-            run_command+="outfile=$(cat $dialog_exitstatus) "
-            if $(cat $dialog_exitstatus | grep -q '.djv'); then
+            run_command+="outfile=$(cat $dialog_exitstatus | tail -n 1 ) "
+            if $(cat $dialog_exitstatus | tail -n 1  | grep -q '.djv'); then
                 $dialogapp --title "Simple pseudo gui of $0" --no-cancel --checklist 'You may encode grayscale and \nmonochrome pages as photo' '12' '50' '' 'force-photo' '' ''  2>"$dialog_exitstatus"
-                run_command+="$(cat $dialog_exitstatus) "
-            elif $(cat $dialog_exitstatus | grep -q '.pdf'); then
+                run_command+="$(cat $dialog_exitstatus | tail -n 1 ) "
+            elif $(cat $dialog_exitstatus | tail -n 1  | grep -q '.pdf'); then
                 $dialogapp --title "Simple pseudo gui of $0" --no-cancel --checklist 'You may trace all pages to monochrome vector images \n(not recommended, but may be useful for shemes an so on)' '12' '80' '' 'potrace' '' ''  2>"$dialog_exitstatus"
-                run_command+="$(cat $dialog_exitstatus) "
+                run_command+="$(cat $dialog_exitstatus | tail -n 1 ) "
             fi
         fi
-        
-        $dialogapp --title "Simple pseudo gui of $0" --no-cancel --radiolist 'Performance options\nMemory footprint depends on\n amount of threads too. Be aware' '22' '50' '' 'adaptive' 'by default' 'on' '1' 'thread - safest' '' '2' 'threads' '' '4' 'threads' '' 'max' 'threads' ''  2>"$dialog_exitstatus"
-        if $(cat "$dialog_exitstatus" | grep -vq adaptive); then
-            run_command+="threads=$(cat $dialog_exitstatus | sed 's/ //g') "
+        $dialogapp --title "Simple pseudo gui of $0" --no-cancel --radiolist "Specify some resources limits.\nMemory footprint is depends on \n image size and amount of processes.\n\nDon't forget to check results! \n" '24' '50' '' '1' 'process' '' '2' 'or less processes' '' '4' 'or less processes' '' 'max' 'available processes' 'on'  2>"$dialog_exitstatus"
+        if $(cat "$dialog_exitstatus" | tail -n 1  | grep -vq max); then
+            run_command+=" proc=$(cat $dialog_exitstatus | tail -n 1  | sed 's/ //g') "
         fi
         
-    elif $(cat $dialog_exitstatus | grep -q 'pdfrsm'); then
+    elif $(cat $dialog_exitstatus | tail -n 1  | grep -q 'pdfrsm'); then
         selectdocument
-    elif $(cat $dialog_exitstatus | grep -q 'calc_pages'); then
+    elif $(cat $dialog_exitstatus | tail -n 1  | grep -q 'calc_pages'); then
         selectdocument
-    elif $(cat $dialog_exitstatus | grep -q 'region'); then
+    elif $(cat $dialog_exitstatus | tail -n 1  | grep -q 'region'); then
         selectdocument
         $dialogapp --title "Simple pseudo gui of $0" --no-cancel --inputbox 'Specify start position of exported pages' '10' '60' '' 2>"$dialog_exitstatus"
-        run_command+="region=$(cat $dialog_exitstatus | sed 's/ //g')-"
+        run_command+="region=$(cat $dialog_exitstatus | tail -n 1  | sed 's/ //g')-"
         $dialogapp --title "Simple pseudo gui of $0" --no-cancel --inputbox 'Specify count of exported pages' '10' '60' '' 2>"$dialog_exitstatus"
-        run_command+="$(cat $dialog_exitstatus | sed 's/ //g') "
+        run_command+="$(cat $dialog_exitstatus | tail -n 1  | sed 's/ //g') "
         
         $dialogapp --title "Simple pseudo gui of $0" --no-cancel --inputbox 'Enter output file name\n(no spaces or special symbols)' '10' '50' '' 2>"$dialog_exitstatus"
-        run_command+="outfile=$(cat $dialog_exitstatus) "
+        run_command+="outfile=$(cat $dialog_exitstatus | tail -n 1 ) "
     fi
     
     rm -f $dialog_exitstatus
     clear
     echo $run_command
-    eval "$run_command"
+    if $(echo $run_command | grep -q calc_pages); then
+        $dialogapp --title 'Pages' --no-cancel --msgbox "\nThere are $(eval "$run_command" | tail -n 1) page(s)\n" '' ''
+    else
+        $dialogapp --title 'execution log without warnings' --no-cancel --msgbox "\n$(echo $(eval "$run_command" 2>&1 | sed 's@# [\\/|-]@@g' | sed 's/  //g'))\n" '' ''
+        #eval "$run_command" 
+    fi
     exit 0
 fi
 
@@ -286,7 +330,7 @@ if $(echo $inargs | grep -q potrace)&&$(potrace -v 2>&1| grep -q 'command not fo
     exit 0
 fi
 
-## lets say next doings may eat up to 512M of RAM for each thread
+## lets say next doings may eat up to 512M of RAM for each process
 c_t_c 512
 
 if $(echo $inargs | grep -q 'outfile=' ); then
@@ -317,7 +361,7 @@ if ($(echo $inargs | grep -q --regexp='stage-extract'))||($(echo $inargs | grep 
         pages=$(djvused -e "n" $infile)
     elif $(echo $infile | grep -iq '.pdf')&&$(echo $inargs | grep -vq 'pdf2ppm'); then
         echo "# # # Get pdf pages count"
-        pages=$(gs -q -dNOSAFER -dNODISPLAY -dNumRenderingThreads=$threads -c "($infile) (r) file runpdfbegin pdfpagecount =" -f "$infile" -o /dev/null)
+        pages=$(gs -q -dNOSAFER -dNODISPLAY -dNumRenderingThreads=$procs -c "($infile) (r) file runpdfbegin pdfpagecount =" -f "$infile" -o /dev/null | sed 's/ .*//g')
     fi
     if $(echo $inargs | grep -q 'calc_pages'); then
         echo $pages
@@ -332,7 +376,7 @@ if ($(echo $inargs | grep -q --regexp='stage-extract'))||($(echo $inargs | grep 
         fi
         if $(echo $infile | grep -q pdf); then
             echo "# Extract pages (start at $startpage to $(($startpage+$pagescount-1))) from pdf" 
-            gs -q -dNOSAFER -dNumRenderingThreads=$threads -sDEVICE=pdfwrite -o $(echo $outfile | sed 's/\..*//g').pdf -sPageList=$startpage-$(($startpage+$pagescount-1)) -f "$infile" 
+            gs -q -dNOSAFER -dNumRenderingThreads=$procs -sDEVICE=pdfwrite -o $(echo $outfile | sed 's/\..*//g').pdf -sPageList=$startpage-$(($startpage+$pagescount-1)) -f "$infile" 
             exit 0
         elif $(echo $infile | grep -q djv); then
             echo "# Extract region from djvu"
@@ -353,7 +397,7 @@ if ($(echo $inargs | grep -q --regexp='stage-extract'))||($(echo $inargs | grep 
     ## reassamble pdf
     if $(echo $inargs | grep -q pdfrsm)&&$(echo $infile | grep -q '.pdf'); then
          echo "# Reassamble pdf"
-         gs -o "rsm_$infile" -sDEVICE=pdfwrite -dNumRenderingThreads=$threads -f "$infile"
+         gs -o "rsm_$infile" -sDEVICE=pdfwrite -dNumRenderingThreads=$procs -f "$infile"
          exit 0
     fi
 fi
@@ -395,7 +439,7 @@ if ($(echo $inargs | grep -vq 'stage-'))||($(echo $inargs | grep -q 'stage-extra
         echo "# ... Extract pages with gs"
         gs -dQUIET -dNOSAFER -dNODISPLAY -sFileName=$infile -c "FileName (r) file runpdfbegin 1 1 pdfpagecount {pdfgetpage /MediaBox get {=print ( ) print} forall (\n) print} for quit" > $defpagesres
 
-        threadscount=0
+        procscount=0
         for ((cyclevar1=1; cyclevar1<=$pages; cyclevar1++)); do
             tmpvar1=$(head -n $cyclevar1 $defpagesres | tail -n 1)
             tmpvar3=$(echo $tmpvar1 | sed 's/ .*//g')
@@ -409,14 +453,14 @@ if ($(echo $inargs | grep -vq 'stage-'))||($(echo $inargs | grep -q 'stage-extra
         wait
         rm -f $defpagesres
     elif $(echo $infile | grep -q '.pdf')&&$(echo $inargs | grep -q 'pdftoppm'); then
-        echo "# ... Extract all pages with pdftoppm (single thread)"
+        echo "# ... Extract all pages with pdftoppm (single proc)"
         pdftoppm -png "$infile" work_dir/
         for cyclevar1 in $(ls work_dir/ | grep '.png'); do
             mv -f work_dir/"$cyclevar1" work_dir/"$(echo $cyclevar1 | sed 's/-00//g' | sed 's/-0//g' | sed 's/-//g')"
         done
     elif $(echo $infile | grep -q '.pdf')&&$(echo $inargs | grep -q 'inkscape'); then
         echo "# ... Extract all pages with inkscape"
-        threadscount=0
+        procscount=0
         for ((cyclevar1=1; cyclevar1<=$pages; cyclevar1++)); do
             inkscape --export-filename=work_dir/$cyclevar1.png --pdf-page=$cyclevar1 $infile &
             trp
@@ -425,7 +469,7 @@ if ($(echo $inargs | grep -vq 'stage-'))||($(echo $inargs | grep -q 'stage-extra
     elif $(echo $infile | grep -q '.djv'); then
         djvuextr(){
             ddjvu -format=ppm -page=$cyclevar1 $infile > work_dir/$cyclevar1.ppm
-            convert work_dir/$cyclevar1.ppm work_dir/$cyclevar1.png
+            convert $limits work_dir/$cyclevar1.ppm work_dir/$cyclevar1.png
             rm -f work_dir/$cyclevar1.ppm
             }
         for ((cyclevar1=1; cyclevar1<=$pages; cyclevar1++)); do
@@ -439,21 +483,19 @@ fi
 #######################
 ## Filter stage
 
-## lets say next doings may eat up to 700M of RAM for each thread
-c_t_c 700
-
 if ($(echo $inargs | grep -vq 'stage-'))||($(echo $inargs | grep -q 'stage-filter')); then
     echo "# Filter stage"
     
     #if $(echo $inargs | grep -q 'rotate='); then
         echo "# ... Rotate pages"
+        c_t_c '' '6'
         rm -fr work_dir/rotated
         mkdir work_dir/rotated
         frot(){
-            convert $cyclevar1 -rotate $rotate work_dir/rotated/$(echo $cyclevar1 | sed 's/.*\///g') 2>/dev/null
+            convert $limits $cyclevar1 -rotate $rotate work_dir/rotated/$(echo $cyclevar1 | sed 's/.*\///g') 2>/dev/null
             mv -f work_dir/rotated/$(echo $cyclevar1 | sed 's/.*\///g') $cyclevar1
             }
-        threadscount=0
+        procscount=0
         for cyclevar1 in work_dir/*.png; do
             frot &
             trp
@@ -464,14 +506,15 @@ if ($(echo $inargs | grep -vq 'stage-'))||($(echo $inargs | grep -q 'stage-filte
     
     if $(echo $inargs | grep -q 'magick='); then
         echo "# ... Apply a custom imagemagick filters to pages"
+        c_t_c '' ''
         rm -fr work_dir/magick
         mkdir work_dir/magick
         mkdir work_dir/magick/original
         filters=$(echo $inargs | sed 's/.*magick=\[//g' | sed 's/\].*//g')
-        threadscount=0
+        procscount=0
         for cyclevar1 in work_dir/*.png; do
             mv -f $cyclevar1 work_dir/magick/original/$(echo $cyclevar1 | sed 's/.*\///g')
-            magickrun="magick work_dir/magick/original/$(echo $cyclevar1 | sed 's/.*\///g') $filters $cyclevar1 2>/dev/null &"
+            magickrun="magick $limits work_dir/magick/original/$(echo $cyclevar1 | sed 's/.*\///g') $filters $cyclevar1 2>/dev/null &"
             eval "$magickrun"
             trp
         done
@@ -480,6 +523,7 @@ if ($(echo $inargs | grep -vq 'stage-'))||($(echo $inargs | grep -q 'stage-filte
     
     if $(echo $inargs | grep -q 'split2p'); then
         echo "# ... Split double pages to single"
+        c_t_c '' '6'
         rm -fr work_dir/split
         mkdir work_dir/split
         mkdir work_dir/split/original
@@ -493,11 +537,11 @@ if ($(echo $inargs | grep -vq 'stage-'))||($(echo $inargs | grep -q 'stage-filte
             W=$(echo $tmpvar1 | sed 's/x.*//g')
             H=$(echo $tmpvar1 | sed 's/.*x//g')
             if [ $W -gt $H ]; then
-                convert $cyclevar1 -crop $((($W/2)+$overlap))x$H+0+0 +repage work_dir/split/$(($(echo $cyclevar1 | sed 's/.*\///g' | sed 's/\..*//g')*2-1)).png 2>/dev/null
-                convert $cyclevar1 -crop $((($W/2)+$overlap))x$H+$((($W/2)-$overlap))+0 +repage work_dir/split/$(($(echo $cyclevar1 | sed 's/.*\///g' | sed 's/\..*//g')*2)).png 2>/dev/null
+                convert $limits $cyclevar1 -crop $((($W/2)+$overlap))x$H+0+0 +repage work_dir/split/$(($(echo $cyclevar1 | sed 's/.*\///g' | sed 's/\..*//g')*2-1)).png 2>/dev/null
+                convert $limits $cyclevar1 -crop $((($W/2)+$overlap))x$H+$((($W/2)-$overlap))+0 +repage work_dir/split/$(($(echo $cyclevar1 | sed 's/.*\///g' | sed 's/\..*//g')*2)).png 2>/dev/null
             else
-                convert $cyclevar1 -crop "$W"x"$((($H/2)+$overlap))"+0+0 +repage work_dir/split/$(($(echo $cyclevar1 | sed 's/.*\///g' | sed 's/\..*//g')*2-1)).png 2>/dev/null
-                convert $cyclevar1 -crop "$W"x"$((($H/2)+$overlap))"+0+$((($H/2)-$overlap)) +repage work_dir/split/$(($(echo $cyclevar1 | sed 's/.*\///g' | sed 's/\..*//g')*2)).png 2>/dev/null
+                convert $limits $cyclevar1 -crop "$W"x"$((($H/2)+$overlap))"+0+0 +repage work_dir/split/$(($(echo $cyclevar1 | sed 's/.*\///g' | sed 's/\..*//g')*2-1)).png 2>/dev/null
+                convert $limits $cyclevar1 -crop "$W"x"$((($H/2)+$overlap))"+0+$((($H/2)-$overlap)) +repage work_dir/split/$(($(echo $cyclevar1 | sed 's/.*\///g' | sed 's/\..*//g')*2)).png 2>/dev/null
             fi
             mv $cyclevar1 "$(echo $cyclevar1 | sed 's/work_dir/work_dir\/split\/original/g')"
         }
@@ -521,12 +565,12 @@ if ($(echo $inargs | grep -vq 'stage-'))||($(echo $inargs | grep -q 'stage-filte
             H=$(echo $tmpvar1 | sed 's/.*x//g')
             if [ "$rightpage" == "" ]; then
                 rightpage='work_dir/rightpage.png'
-                convert -size "$W"x"$H" xc: $rightpage 2>/dev/null
+                convert $limits -size "$W"x"$H" xc: $rightpage 2>/dev/null
             fi
             if [ $W -lt $H ]; then
-                montage $leftpage $rightpage -tile 2x1 -geometry +0+0 work_dir/glued/$(($(echo $countvar1 | sed 's/.*\///g' | sed 's/\..*//g')/2)).png 2>/dev/null
+                montage $limits $leftpage $rightpage -tile 2x1 -geometry +0+0 work_dir/glued/$(($(echo $countvar1 | sed 's/.*\///g' | sed 's/\..*//g')/2)).png 2>/dev/null
             else
-                montage $leftpage $rightpage -tile 1x2 -geometry +0+0 work_dir/glued/$(($(echo $countvar1 | sed 's/.*\///g' | sed 's/\..*//g')/2)).png 2>/dev/null
+                montage $limits $leftpage $rightpage -tile 1x2 -geometry +0+0 work_dir/glued/$(($(echo $countvar1 | sed 's/.*\///g' | sed 's/\..*//g')/2)).png 2>/dev/null
             fi
             mv $leftpage "$(echo $leftpage | sed 's|\/0|\/|g' | sed 's|\/0|\/|g' | sed 's|\/0|\/|g' | sed 's|\/0|\/|g' | sed 's/work_dir/work_dir\/glued\/original/g')"
             mv $rightpage "$(echo $rightpage | sed 's|\/0|\/|g' | sed 's|\/0|\/|g' | sed 's|\/0|\/|g' | sed 's|\/0|\/|g'| sed 's/work_dir/work_dir\/glued\/original/g')"
@@ -574,7 +618,7 @@ if ($(echo $inargs | grep -vq 'stage-'))||($(echo $inargs | grep -q 'stage-filte
             H=$(echo $tmpvar1 | sed 's/.*x//g')
             for ((cyclevar2=1;cyclevar2<="$((4-($countvar1%4)))";cyclevar2++)); do
                 printf -v out_file_name "%05d" "$(($cyclevar1+$cyclevar2))" # add extra zeros
-                convert -size "$W"x"$H" xc: work_dir/bklsort/$out_file_name.png 2>/dev/null
+                convert $limits -size "$W"x"$H" xc: work_dir/bklsort/$out_file_name.png 2>/dev/null
             done
         fi
         pagelist=$(mktemp work_dir/bklsort/XXXXXX.tmp)
@@ -594,15 +638,18 @@ if ($(echo $inargs | grep -vq 'stage-'))||($(echo $inargs | grep -q 'stage-filte
     
     if $(echo $inargs | grep -q 'glue2p'); then
         echo "# ... Glue single pages to double"
+        c_t_c '' ''
         glue_func
     elif $(echo $inargs | grep -q 'booklet'); then
         echo "# ... Make simple booklet"
+        c_t_c '' ''
         echo "# ... ... Resort pages"
         booklet_func
         echo "# ... ... Glue pages"
         glue_func
     elif $(echo $inargs | grep -q 'cbook'); then
         echo "# ... Make complex booklet"
+        c_t_c '' ''
         if $(echo $inargs | grep -q 'cbook='); then
             period=$(echo $inargs | sed 's/.*cbook=//g' | sed 's/ .*//g')
         else
@@ -651,6 +698,7 @@ if ($(echo $inargs | grep -vq 'stage-'))||($(echo $inargs | grep -q 'stage-filte
     
     if $(echo $inargs | grep -q 'room='); then
         echo "# ... Make extra 'room' for manual pages insert"
+        c_t_c '' '1'
         rm -fr work_dir/room
         mkdir work_dir/room
         mkdir work_dir/room/original
@@ -677,21 +725,19 @@ fi
 #######################
 ## Mux stage
 
-## lets say next doings may eat up to 1000M of RAM for each thread
-c_t_c 1000
-
 if ($(echo $inargs | grep -vq 'stage-'))||($(echo $inargs | grep -q 'stage-mux')); then
     
     echo "# Mux stage"
+    c_t_c '' '3'
     if $(echo $outfile | grep -q '.djv'); then
         echo "# ... Prepare pages for conversion"
-        threadscount=0
+        procscount=0
         for cyclevar1 in work_dir/*.png; do
             if $(identify $cyclevar1 | grep -vq Gray)||$(echo $inargs | grep -q force-photo); then
-                magick $cyclevar1 work_dir/$(echo $cyclevar1  | sed 's|.*\/||g').ppm 2>/dev/null &
+                magick $limits $cyclevar1 work_dir/$(echo $cyclevar1  | sed 's|.*\/||g').ppm 2>/dev/null &
             else
             ## conversion to pbm may eats a lot of RAM
-                magick $cyclevar1 work_dir/$(echo $cyclevar1  | sed 's|.*\/||g').pbm 2>/dev/null &
+                magick $limits $cyclevar1 work_dir/$(echo $cyclevar1  | sed 's|.*\/||g').pbm 2>/dev/null &
             fi
             trp
         done
@@ -699,7 +745,7 @@ if ($(echo $inargs | grep -vq 'stage-'))||($(echo $inargs | grep -q 'stage-mux')
 
         if $(ls work_dir/ | grep -q '.ppm'); then
             echo "# ... Process *.ppm > *.djvu"
-            threadscount=0
+            procscount=0
             for cyclevar1 in work_dir/*.ppm; do
                 #cpaldjvu $cyclevar1 $(echo $cyclevar1  | sed 's|.*\/||g').djvu &
                 c44 $cyclevar1 work_dir/$(echo $cyclevar1  | sed 's|.*\/||g').djvu &
@@ -709,7 +755,7 @@ if ($(echo $inargs | grep -vq 'stage-'))||($(echo $inargs | grep -q 'stage-mux')
         fi
         if $(ls work_dir/ | grep -q '.pbm'); then
             echo "# ... Process *.pbm > *.djvu"
-            threadscount=0
+            procscount=0
             for cyclevar1 in work_dir/*.pbm; do
                 cjb2 $cyclevar1 -losslevel 200 work_dir/$(echo $cyclevar1  | sed 's|.*\/||g').djvu &
                 trp
@@ -728,29 +774,29 @@ if ($(echo $inargs | grep -vq 'stage-'))||($(echo $inargs | grep -q 'stage-mux')
             fi
         done
     elif $(echo $outfile | grep -q '.pdf'); then
-        threadscount=0
+        procscount=0
         echo "# ... Prepare pages for conversion"
         if $(echo $inargs | grep -q potrace); then
             for cyclevar1 in work_dir/*.png; do
                 ## conversion to pbm may eats a lot of RAM
                 if $(identify $cyclevar1 | grep -vq Gray)||$(echo $inargs | grep -q force-photo); then
-                    magick $cyclevar1 work_dir/$(echo $cyclevar1  | sed 's|.*\/||g').ppm 2>/dev/null &
+                    magick $limits $cyclevar1 work_dir/$(echo $cyclevar1  | sed 's|.*\/||g').ppm 2>/dev/null &
                 else
                     ## conversion to pbm may eats a lot of RAM
-                    magick $cyclevar1 work_dir/$(echo $cyclevar1  | sed 's|.*\/||g').pbm 2>/dev/null &
+                    magick $limits $cyclevar1 work_dir/$(echo $cyclevar1  | sed 's|.*\/||g').pbm 2>/dev/null &
                 fi
                 trp
             done
             wait
             echo "# ... Convert *.ppm > *.pdf"
-            threadscount=0
+            procscount=0
             for cyclevar1 in work_dir/*.ppm; do
-                magick $cyclevar1 work_dir/$(echo $cyclevar1  | sed 's|.*\/||g').pdf 2>/dev/null &
+                magick $limits $cyclevar1 work_dir/$(echo $cyclevar1  | sed 's|.*\/||g').pdf 2>/dev/null &
                 trp
             done
             wait
             echo "# ... Trace *.pbm > *.pdf"
-            threadscount=0
+            procscount=0
             for cyclevar1 in work_dir/*.pbm; do
                 potrace -b pdf "work_dir/$(echo $cyclevar1  | sed 's|.*\/||g')" -o work_dir/$(echo $cyclevar1  | sed 's|.*\/||g').pdf  &
                 trp
@@ -758,18 +804,18 @@ if ($(echo $inargs | grep -vq 'stage-'))||($(echo $inargs | grep -q 'stage-mux')
             wait
             echo "# ... Assemble pdf file"
             cd work_dir
-            gs -o "../$outfile" -sDEVICE=pdfwrite -dNOPAUSE -dPDFFitPage -dNumRenderingThreads=$threads -sPAPERSIZE=a4 $(echo $(ls | grep '.pdf' | sort -n)) 1>/dev/null
+            gs -o "../$outfile" -sDEVICE=pdfwrite -dNOPAUSE -dPDFFitPage -dNumRenderingThreads=$procs -sPAPERSIZE=a4 $(echo $(ls | grep '.pdf' | sort -n)) 1>/dev/null
             cd ../
         else
-            threadscount=0
+            procscount=0
             for cyclevar1 in work_dir/*.png; do
-                magick $cyclevar1 work_dir/$(echo $cyclevar1  | sed 's|.*\/||g').pdf 2>/dev/null &
+                magick $limits $cyclevar1 work_dir/$(echo $cyclevar1  | sed 's|.*\/||g').pdf 2>/dev/null &
                 trp
             done
             wait
             echo "# ... Assemble pdf file"
             cd work_dir
-            gs -o "../$outfile" -sDEVICE=pdfwrite -dNOPAUSE -dPDFFitPage -dNumRenderingThreads=$threads -sPAPERSIZE=a4 $(echo $(ls | grep '.pdf' | sort -n)) 1>/dev/null
+            gs -o "../$outfile" -sDEVICE=pdfwrite -dNOPAUSE -dPDFFitPage -dNumRenderingThreads=$procs -sPAPERSIZE=a4 $(echo $(ls | grep '.pdf' | sort -n)) 1>/dev/null
             #convert $(echo $(ls | grep '.png' | sort -n)) "../$outfile" 2>/dev/null
             cd ../
             
