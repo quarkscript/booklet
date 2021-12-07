@@ -148,34 +148,29 @@ trp(){
     if [ "$procscount" -ge "$procs" ]; then procscount=0; activmon & 
     wait; fi
     }
-    
-#inargs=$(echo $@ | sed 's/,/ /g')
+
 inargs=$(echo $@)
-dialogapp=Xdialog
-selectdocument(){
-    var_len_dialog="$dialogapp --title "'"Simple pseudo gui of '$0'" --no-cancel --radiolist "Specify document to process\nfilename must not contain spaces or special symbols, otherwise script fails" '"'38' '100' '' "    
-    tmpfile33=$(mktemp XXXXXXXX.tmp)
-    ls -1 --hide=*.tmp --hide=$(echo $0 | sed 's|./||g') | grep --regexp='.pdf' --regexp='.djv' | sed "s/'//g" | sed 's/"//g' >$tmpfile33
-    for ((cyclevar3=1;cyclevar3<=$(wc -l $tmpfile33 | sed 's/ .*//g');cyclevar3+=1)); do
-        var_len_dialog+="'$(cat $tmpfile33 | head -n +$cyclevar3 | tail -n 1)' '' '' "
-    done
-    var_len_dialog+=' 2>'"$dialog_exitstatus"
-    eval "$var_len_dialog"
-    run_command+="infile=$(cat $dialog_exitstatus | tail -n 1 ) "
-    rm -f $tmpfile33
-}
-if [ -z "$inargs" ] && $($dialogapp --version 2>&1 | grep -q 'command not found') || $(echo $inargs | grep -q --regexp='-h' --regexp='--help'); then
-    if $(less -V 2>&1| grep -q 'command not found'); then
-        printhelp; exit 0
-    else
-        printhelp | less; exit 0
-    fi
-elif $($dialogapp --version 2>&1 | grep -vq 'command not found') && [ -z "$inargs" ]; then 
+
+if $(Xdialog --version 2>&1 | grep -vq 'command not found') && [ -z "$inargs" ]; then 
+    dialogapp=Xdialog
+    selectdocument(){
+        var_len_dialog="$dialogapp --title "'"Simple pseudo gui of '$0'" --no-cancel --radiolist "Specify document to process\nfilename must not contain spaces or special symbols, otherwise script fails" '"'38' '100' '' "    
+        tmpfile33=$(mktemp XXXXXXXX.tmp)
+        ls -1 --hide=*.tmp --hide=$(echo $0 | sed 's|./||g') | grep --regexp='.pdf' --regexp='.djv' | sed "s/'//g" | sed 's/"//g' >$tmpfile33
+        for ((cyclevar3=1;cyclevar3<=$(wc -l $tmpfile33 | sed 's/ .*//g');cyclevar3+=1)); do
+            var_len_dialog+="'$(cat $tmpfile33 | head -n +$cyclevar3 | tail -n 1)' '' '' "
+        done
+        var_len_dialog+=' 2>'"$dialog_exitstatus"
+        eval "$var_len_dialog"
+        run_command+="infile=$(cat $dialog_exitstatus | tail -n 1 ) "
+        rm -f $tmpfile33
+    }
+
     dialog_exitstatus=$(mktemp XXXXXXXX.tmp)
     clear
     
     run_command="$0 "
-    $dialogapp --title "Simple pseudo gui of $0" --radiolist 'Rasterized Pdf or Djvu Combiner (rpdc) - shell scripts for\nmake booklets, split double pages, apply imagemagick filters and so on\n\nAuthor/dev. Andrew S. [github,gitlab].com/quarkscript/ Licence GPL' '28' '100' '' 'default' 'split->filter->mux pdf/djvu document' 'on' 'pdfrsm' 'reassemble pdf with gs' '' 'calc_pages' '' '' 'region' 'extract X pages start at Y page' ''  2>"$dialog_exitstatus"
+    $dialogapp --title "Simple pseudo gui of $0" --radiolist 'Rasterized Pdf or Djvu Combiner (rpdc) - shell scripts for\nmake booklets, split double pages, apply imagemagick filters and so on\n\nAuthor/dev. Andrew S.   https://git[hu,la]b.com/quarkscript/      Licence GPL' '28' '100' '' 'default' 'split->filter->mux pdf/djvu document' 'on' 'pdfrsm' 'reassemble pdf with gs' '' 'calc_pages' '' '' 'region' 'extract X pages start at Y page' ''  2>"$dialog_exitstatus"
     
     if [ -z "$(cat $dialog_exitstatus | tail -n 1 )" ]; then
         rm -f $dialog_exitstatus
@@ -286,6 +281,190 @@ elif $($dialogapp --version 2>&1 | grep -vq 'command not found') && [ -z "$inarg
         #eval "$run_command" 
     fi
     exit 0
+
+elif $(kdialog --version 2>&1 | grep -vq 'command not found') && [ -z "$inargs" ]; then
+    dialogapp=kdialog
+    check_status(){
+        if [ -z "$(cat "$dialog_exitstatus")" ]; then
+            $dialogapp --title 'Script termination message' --msgbox 'Nothing specified\nScript terminated'
+            rm -f $dialog_exitstatus
+            exit 1
+        fi
+    }
+    selectdocument(){
+        var_len_dialog="$dialogapp --title "'"Simple pseudo gui of '$0'" --combobox "Specify document to process\nfilename must not contain spaces or special symbols, \notherwise script may fails" '" " 
+        chkvar1="$var_len_dialog"
+        tmpfile33=$(mktemp XXXXXXXX.tmp)
+        echo ''>"$dialog_exitstatus"
+        ls -1 --hide=*.tmp --hide=$(echo $0 | sed 's|./||g') | grep --regexp='.pdf' --regexp='.djv' | sed "s/'//g" | sed 's/"//g' >$tmpfile33
+        for ((cyclevar3=1;cyclevar3<=$(wc -l $tmpfile33 | sed 's/ .*//g');cyclevar3+=1)); do
+            var_len_dialog+="'$(cat $tmpfile33 | head -n +$cyclevar3 | tail -n 1)' "
+        done
+        if [ "$chkvar1" == "$var_len_dialog" ]; then
+            $dialogapp --title "Simple pseudo gui of $0" --msgbox '"djvu" or "pdf" files not found\nplace document to current dir\nand try again'
+            rm -f $tmpfile33
+            exit 1
+        fi
+        var_len_dialog+=' 1>'"$dialog_exitstatus"
+        eval "$var_len_dialog"
+        run_command+="infile=$(cat $dialog_exitstatus | tail -n 1 ) "
+        rm -f $tmpfile33
+        check_status
+    }
+
+    dialog_exitstatus=$(mktemp XXXXXXXX.tmp)
+    clear
+    
+    run_command="$0 "
+    $dialogapp --title "Simple pseudo gui of $0" --combobox 'Rasterized Pdf or Djvu Combiner (rpdc) - shell scripts for\nmake booklets, split double pages, apply imagemagick filters and so on\n\nAuthor/dev. Andrew S.   https://git[la,hu]b.com/quarkscript/ Licence GPL\n\nSpecify next action' 'split->filter->mux pdf/djvu document' 'reassemble pdf with ghostscript' 'calc pages of document' 'extract X pages start at Y page' --default 'split->filter->mux pdf/djvu document'  1>"$dialog_exitstatus"
+    check_status
+    
+    if $(cat "$dialog_exitstatus" | grep -q reassemble); then
+        run_command+="pdfrsm "
+        selectdocument
+    elif $(cat "$dialog_exitstatus" | grep -q calc); then
+        run_command+="calc_pages "
+        selectdocument
+    elif $(cat "$dialog_exitstatus" | grep -q extract); then
+        selectdocument
+        echo ''>$dialog_exitstatus
+        $dialogapp --title "Simple pseudo gui of $0" --inputbox 'Specify start position of exported pages' '1' 1>"$dialog_exitstatus"
+        run_command+="region=$(cat $dialog_exitstatus | tail -n 1  | sed 's/ //g')-"
+        check_status
+        echo ''>$dialog_exitstatus
+        $dialogapp --title "Simple pseudo gui of $0" --inputbox 'Specify count of exported pages' '1' 1>"$dialog_exitstatus"
+        run_command+="$(cat $dialog_exitstatus | tail -n 1  | sed 's/ //g') "
+        check_status
+        echo ''>$dialog_exitstatus
+        $dialogapp --title "Simple pseudo gui of $0" --inputbox 'Enter output file name\n(no spaces or special symbols)' '' 1>"$dialog_exitstatus"
+        run_command+="outfile=$(cat $dialog_exitstatus | tail -n 1 ) "
+        check_status
+    elif $(cat "$dialog_exitstatus" | grep -q split); then
+        echo ''>$dialog_exitstatus
+        $dialogapp --title "Simple pseudo gui of $0" --combobox 'Select required stages' 'all stages' '1- split pages to single raster pictures' '2- make booklet or apply an imagemagick filters or so on' '3- assemble pages to output djvu or pdf document' --default 'all stages' 1>"$dialog_exitstatus"
+        if $(cat $dialog_exitstatus | tail -n 1  | grep -q 'all stages'); then
+            tmpvar6=''
+        elif $(cat $dialog_exitstatus | tail -n 1  | grep -q '1-'); then
+            tmpvar6='stage-extract'
+        elif $(cat $dialog_exitstatus | tail -n 1  | grep -q '2-'); then
+            tmpvar6='stage-filter'
+        else
+            tmpvar6='stage-mux'
+        fi
+        check_status
+        run_command+="$(echo $tmpvar6) "
+        if $(echo $tmpvar6 | grep -q stage-extract) || [ -z "$tmpvar6" ]; then
+            selectdocument
+            if $(cat $dialog_exitstatus | tail -n 1  | grep -q '.pdf'); then
+                echo ''>$dialog_exitstatus
+                $dialogapp --title "Simple pseudo gui of $0" --combobox 'Specify an engine to rasterize pdf' 'ghostscript' 'pdftoppm' 'inkscape' --default 'ghostscript' 1>"$dialog_exitstatus"
+                check_status
+                if $(cat $dialog_exitstatus | tail -n 1  | grep -vq 'ghostscript'); then
+                    run_command+="$(cat $dialog_exitstatus | tail -n 1 ) "
+                else
+                    echo ''>$dialog_exitstatus
+                    $dialogapp --title "Simple pseudo gui of $0" --combobox 'Specify a color space' 'monochrome' '8-bit gray' '4-bit color' '8-bit color' '24-bit color' --default '8-bit color'  1>"$dialog_exitstatus"
+                    check_status
+                    if $(cat $dialog_exitstatus | tail -n 1  | grep -q 'monochrome'); then
+                        run_command+="pngmono "
+                    elif $(cat $dialog_exitstatus | tail -n 1  | grep -q '8-bit gray'); then
+                        run_command+="pnggray "
+                    elif $(cat $dialog_exitstatus | tail -n 1  | grep -q '4-bit color'); then
+                        run_command+="png16 "
+                    elif $(cat $dialog_exitstatus | tail -n 1  | grep -q '8-bit color'); then
+                        run_command+="png256 "
+                    else
+                        run_command+="png16m "
+                    fi
+                    echo ''>$dialog_exitstatus
+                    $dialogapp --title "Simple pseudo gui of $0" --inputbox 'Specify images resolution in dpi' '300' 1>"$dialog_exitstatus"
+                    run_command+="pdfdpi=$(cat $dialog_exitstatus | tail -n 1 ) "
+                fi
+            fi
+            
+            echo ''>$dialog_exitstatus
+            $dialogapp --title "Simple pseudo gui of $0" --inputbox 'Specify pages count or leave empty\nto process all available' '' 1>"$dialog_exitstatus"
+            if $(cat $dialog_exitstatus | tail -n 1  | grep -q [0-9]); then
+                run_command+="pages=$(cat $dialog_exitstatus | tail -n 1  | sed 's/ //g') "
+            fi
+        fi
+        if $(echo $tmpvar6 | grep -q stage-filter) || [ -z "$tmpvar6" ]; then
+            echo ''>$dialog_exitstatus
+            $dialogapp --title "Simple pseudo gui of $0" --inputbox 'Specify rotate angle\n(it will be applied any way)' '0' 1>"$dialog_exitstatus"
+            check_status
+            run_command+="rotate=$(cat $dialog_exitstatus | tail -n 1  | sed 's/ //g') "
+            echo ''>$dialog_exitstatus
+            $dialogapp --title "Simple pseudo gui of $0" --combobox 'Specify a filter or sheme' 'none' 'split: |1|2| > |1|+|2| or |1/2| > |1|+|2|' 'glue: |1|+|2| > |1|2| or |1|+|2| > |1/2|' 'booklet: |1|+|2|+|3|+|4| > |4|1|+|2|3|' 'make complex booklet' 'apply imagemagick filters' 'make extra free slots for manual intervention' --default 'none' 1>"$dialog_exitstatus"
+            
+            tmpvar7=$(cat $dialog_exitstatus | tail -n 1 )
+            if [ "$tmpvar7" == "split: |1|2| > |1|+|2| or |1/2| > |1|+|2|" ]; then
+                echo ''>$dialog_exitstatus
+                $dialogapp --title "Simple pseudo gui of $0" --inputbox 'Specify overlap pixels\npositive or negative' '0' 1>"$dialog_exitstatus"
+                run_command+="split2p=$(cat $dialog_exitstatus | tail -n 1  | sed 's/ //g') "
+            elif [ "$tmpvar7" == "glue: |1|+|2| > |1|2| or |1|+|2| > |1/2|" ]; then
+                run_command+="glue2p "
+            elif [ "$tmpvar7" == "make complex booklet" ]; then
+                echo ''>$dialog_exitstatus
+                $dialogapp --title "Simple pseudo gui of $0" --inputbox 'Specify period in pages' '16' 1>"$dialog_exitstatus"
+                run_command+="cbook=$(cat $dialog_exitstatus | tail -n 1  | sed 's/ //g') "
+            elif [ "$tmpvar7" == "apply imagemagick filters" ]; then
+                echo ''>$dialog_exitstatus
+                $dialogapp --title "Simple pseudo gui of $0" --inputbox 'Specify imagemagick filters like\n-auto-gamma -adaptive-blur 3 -gamma 1.2 -brightness-contrast 0x70' '' 1>"$dialog_exitstatus"
+                check_status
+                run_command+="magick=[$(cat $dialog_exitstatus | tail -n 1 )] "
+            elif [ "$tmpvar7" == "make extra free slots for manual intervention" ]; then
+                echo ''>$dialog_exitstatus
+                $dialogapp --title "Simple pseudo gui of $0" --inputbox 'Specify start position for manual insert pages' '' 1>"$dialog_exitstatus"
+                run_command+="room=$(cat $dialog_exitstatus | tail -n 1  | sed 's/ //g')-"
+                check_status
+                echo ''>$dialog_exitstatus
+                $dialogapp --title "Simple pseudo gui of $0" --inputbox 'Specify count of manual inserted pages' '' 1>"$dialog_exitstatus"
+                check_status
+                run_command+="$(cat $dialog_exitstatus | tail -n 1  | sed 's/ //g') "                
+            else
+                run_command+="booklet "
+            fi
+        fi
+        if $(echo $tmpvar6 | grep -q stage-mux) || [ -z "$tmpvar6" ]; then
+            $dialogapp --title "Simple pseudo gui of $0" --inputbox 'Enter output file (pdf or djvu)' 'book.djvu' 1>"$dialog_exitstatus"
+            check_status
+            run_command+="outfile=$(cat $dialog_exitstatus | tail -n 1 ) "
+            if $(cat $dialog_exitstatus | tail -n 1  | sed 's/.*\././g' | grep -q '.djv'); then
+                $dialogapp --title "Simple pseudo gui of $0" --combobox 'You may encode grayscale and \nmonochrome pages as photo' 'encode as text' 'encode as photo' --default 'encode as text'  1>"$dialog_exitstatus"
+                if $(cat $dialog_exitstatus | tail -n 1  | grep -q 'photo' ); then
+                    run_command+="force-photo "
+                fi
+            elif $(cat $dialog_exitstatus | tail -n 1 | sed 's/.*\././g' | grep -q '.pdf'); then
+                $dialogapp --title "Simple pseudo gui of $0" --combobox 'You may trace all pages to monochrome vector images \n(not recommended, but may be useful for shemes an so on)' 'do not trace' 'trace with potrace' --default 'do not trace'  1>"$dialog_exitstatus"
+                if $(cat $dialog_exitstatus | tail -n 1  | grep -q 'potrace'); then
+                    run_command+="potrace "
+                fi
+            fi
+        fi
+        $dialogapp --title "Simple pseudo gui of $0" --combobox "Memory footprint of each process is depend on image size.\nIn case run out of RAM you may lost some pages. So \n\ndon't forget to check results! Specify limit to" '1 process' '2 or less processes' '4 or less processes' 'max available processes' --default 'max available processes'  1>"$dialog_exitstatus"
+        if $(cat "$dialog_exitstatus" | tail -n 1  | grep -vq max); then
+            run_command+=" proc=$(cat $dialog_exitstatus | tail -n 1  | sed 's/ .*//g') "
+        fi 
+    fi
+    
+    rm -f $dialog_exitstatus
+    clear
+    echo $run_command
+    if $(echo $run_command | grep -q calc_pages); then
+        $dialogapp --title 'Pages' --msgbox "\nThere are $(eval "$run_command" | tail -n 1) page(s)\n" '' ''
+    else
+        $dialogapp --title 'execution log' --msgbox "\n$(eval "$run_command" 2>&1 | sed 's@# [\\/|-]@@g')\n" '' ''
+        #eval "$run_command" 
+    fi
+    exit 0
+
+elif [ -z "$inargs" ] || $(echo $inargs | grep -q --regexp='-h' --regexp='--help'); then
+    if $(less -V 2>&1| grep -q 'command not found'); then
+        printhelp; exit 0
+    else
+        printhelp | less; exit 0
+    fi
+
 fi
 
 if $(echo $inargs | grep -q 'selfsomedebugon' ); then
@@ -299,6 +478,7 @@ elif $(echo $inargs | grep -q 'selfsomedebugoff' ); then
     sed -i 's/) #-o \/dev\/null/-o \/dev\/null/g' $(echo $0 | sed 's|.\/||g')
     exit 0
 fi
+
 ## check for djvulibre installed
 if $(echo $inargs | grep -q djv)&&$(djvused --help 2>&1| grep -q 'command not found')||$(echo $inargs | grep -vq outfile)&&$(echo $inargs | grep -vq --regexp='stage-extract' --regexp='stage-filter')&&$(djvused --help 2>&1| grep -q 'command not found'); then 
     echo seems djvulibre is not installed, it required for djvu proc.
